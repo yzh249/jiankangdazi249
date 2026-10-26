@@ -2,8 +2,7 @@
 import streamlit as st
 
 import db
-from pwa_head import PWA_HEAD
-from sw_route import install_manifest_route
+from sw_route import install_pwa, register_sw_component
 
 MOBILE_CSS = """
 <style>
@@ -26,9 +25,9 @@ MOBILE_CSS = """
 def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
-    install_manifest_route()
+    install_pwa()
+    register_sw_component()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
-    st.markdown(PWA_HEAD, unsafe_allow_html=True)
 
 
 def require_login() -> int:
