@@ -58,9 +58,7 @@ DB_PATH = DATA_DIR / "app.db"
 SCHEMA_SQLITE = """
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    nickname TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    pin_hash TEXT NOT NULL,
-    salt TEXT NOT NULL,
+    public_id TEXT NOT NULL UNIQUE COLLATE NOCASE,
     created_at TEXT NOT NULL
 );
 
@@ -84,14 +82,6 @@ CREATE TABLE IF NOT EXISTS pairs (
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     dissolved_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS invites (
-    code TEXT PRIMARY KEY,
-    creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'unused',
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS meals (
@@ -134,12 +124,10 @@ CREATE TABLE IF NOT EXISTS images (
 SCHEMA_PG = """
 CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
-    nickname TEXT NOT NULL,
-    pin_hash TEXT NOT NULL,
-    salt TEXT NOT NULL,
+    public_id TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS users_nickname_lower_idx ON users (lower(nickname));
+CREATE UNIQUE INDEX IF NOT EXISTS users_public_id_lower_idx ON users (lower(public_id));
 
 CREATE TABLE IF NOT EXISTS profiles (
     user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -161,14 +149,6 @@ CREATE TABLE IF NOT EXISTS pairs (
     status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     dissolved_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS invites (
-    code TEXT PRIMARY KEY,
-    creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'unused',
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS meals (
@@ -274,6 +254,26 @@ def init_db() -> None:
     if _inited:
         return
     with closing(get_conn()) as conn:
+        # 迁移：旧 schema 没有 public_id，DROP 重建（只执行一次）
+        has_public_id = conn.execute(
+            "SELECT 1 FROM pragma_table_info('users') WHERE name = 'public_id'"
+        ).fetchone() if not USE_PG else conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='public_id'"
+        ).fetchone()
+        if not has_public_id:
+            conn.executescript(
+                """
+                DROP TABLE IF EXISTS meal_items;
+                DROP TABLE IF EXISTS meals;
+                DROP TABLE IF EXISTS images;
+                DROP TABLE IF EXISTS pairs;
+                DROP TABLE IF EXISTS profiles;
+                DROP TABLE IF EXISTS users;
+                """
+                if not USE_PG else
+                "DROP TABLE IF EXISTS meal_items, meals, images, pairs, profiles, users CASCADE"
+            )
+            conn.commit()
         conn.executescript(SCHEMA_PG if USE_PG else SCHEMA_SQLITE)
         conn.commit()
     _inited = True
@@ -288,46 +288,39 @@ def _insert(conn, sql: str, params: tuple) -> int:
     return int(cur.lastrowid)
 
 
-# ---------- 用户 ----------
+# ---------- 用户（纯 ID 制，无密码） ----------
 
-def _hash_pin(pin: str, salt: str) -> str:
-    return hashlib.pbkdf2_hmac("sha256", pin.encode(), bytes.fromhex(salt), 120_000).hex()
-
-
-def create_user(nickname: str, pin: str) -> int:
-    nickname = nickname.strip()
-    salt = secrets.token_hex(16)
+def get_or_create_user(public_id: str) -> int:
+    """ID 存在则登录，不存在则自动注册。返回 user_id。"""
+    public_id = (public_id or "").strip()
     with closing(get_conn()) as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM users WHERE lower(nickname) = lower(?)", (nickname,)
+        row = conn.execute(
+            "SELECT id FROM users WHERE lower(public_id) = lower(?)",
+            (public_id,),
         ).fetchone()
-        if exists:
-            raise ValueError("这个昵称已经有人用了")
+        if row:
+            return int(row["id"])
         uid = _insert(
             conn,
-            "INSERT INTO users (nickname, pin_hash, salt, created_at) VALUES (?,?,?,?)",
-            (nickname, _hash_pin(pin, salt), salt, now()),
+            "INSERT INTO users (public_id, created_at) VALUES (?,?)",
+            (public_id, now()),
         )
         conn.commit()
         return uid
 
 
-def verify_user(nickname: str, pin: str) -> int | None:
-    with closing(get_conn()) as conn:
-        row = conn.execute(
-            "SELECT id, pin_hash, salt FROM users WHERE lower(nickname) = lower(?)",
-            (nickname.strip(),),
-        ).fetchone()
-    if not row:
-        return None
-    if hmac.compare_digest(row["pin_hash"], _hash_pin(pin, row["salt"])):
-        return int(row["id"])
-    return None
-
-
 def get_user(user_id: int):
     with closing(get_conn()) as conn:
         row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_public_id(public_id: str):
+    with closing(get_conn()) as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE lower(public_id) = lower(?)",
+            ((public_id or "").strip(),),
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -387,65 +380,26 @@ def _start_pair(conn, a: int, b: int) -> None:
     )
 
 
-def create_invite(user_id: int) -> str:
-    if get_active_pair(user_id):
-        raise ValueError("你已经有搭子了，先解绑才能邀请新的人")
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    with closing(get_conn()) as conn:
-        for _ in range(10):
-            code = "".join(secrets.choice(alphabet) for _ in range(6))
-            try:
-                conn.execute(
-                    "INSERT INTO invites (code, creator_id, status, created_at, expires_at)"
-                    " VALUES (?,?,'unused',?,?)",
-                    (
-                        code,
-                        user_id,
-                        now(),
-                        (dt.datetime.now(TZ) + dt.timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S"),
-                    ),
-                )
-                conn.commit()
-                return code
-            except _IntegrityError:
-                continue
-    raise RuntimeError("邀请码生成失败，请重试")
-
-
-def latest_invite(user_id: int):
-    with closing(get_conn()) as conn:
-        row = conn.execute(
-            """SELECT * FROM invites WHERE creator_id = ? AND status = 'unused'
-               AND expires_at > ? ORDER BY created_at DESC LIMIT 1""",
-            (user_id, now()),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def bind_invite(code: str, user_id: int) -> tuple[bool, str]:
-    code = code.strip().upper()
+def bind_by_public_id(user_id: int, partner_public_id: str) -> tuple[bool, str]:
+    """直接输入对方 ID 绑定搭子，无需邀请码。"""
+    partner_public_id = (partner_public_id or "").strip()
+    if not partner_public_id:
+        return False, "请输入对方 ID"
     if get_active_pair(user_id):
         return False, "你已经有搭子了，先解绑才能绑定新的人"
+
+    partner = get_user_by_public_id(partner_public_id)
+    if not partner:
+        return False, "这个 ID 不存在，请让对方先登录一次"
+    if int(partner["id"]) == int(user_id):
+        return False, "不能绑定自己"
+    if get_active_pair(int(partner["id"])):
+        return False, "对方已经有搭子了"
+
     with closing(get_conn()) as conn:
-        inv = conn.execute("SELECT * FROM invites WHERE code = ?", (code,)).fetchone()
-        if not inv:
-            return False, "邀请码不存在"
-        if inv["status"] != "unused":
-            return False, "这个邀请码已经被用掉了"
-        if inv["expires_at"] <= now():
-            return False, "邀请码已过期，请让对方重新生成"
-        if inv["creator_id"] == user_id:
-            return False, "不能绑定自己生成的邀请码"
-        partner_pair = conn.execute(
-            "SELECT 1 FROM pairs WHERE status='active' AND (user_a=? OR user_b=?)",
-            (inv["creator_id"], inv["creator_id"]),
-        ).fetchone()
-        if partner_pair:
-            return False, "对方已经有搭子了"
-        _start_pair(conn, int(inv["creator_id"]), user_id)
-        conn.execute("UPDATE invites SET status = 'used' WHERE code = ?", (code,))
+        _start_pair(conn, user_id, int(partner["id"]))
         conn.commit()
-    return True, "绑定成功"
+    return True, f"绑定成功，你的搭子是 {partner['public_id']}"
 
 
 def dissolve_pair(user_id: int) -> bool:
