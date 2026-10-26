@@ -1,6 +1,6 @@
 """拦截 Streamlit 默认 manifest 请求，返回我们的 PWA manifest。"""
 import base64
-import json
+import gc
 
 from pwa_head import PWA_HEAD_B64
 
@@ -8,9 +8,7 @@ _manifest_added = False
 
 
 def _get_manifest_json() -> str:
-    """从 PWA_HEAD 里提取 manifest data URI 并解码。"""
     head = base64.b64decode(PWA_HEAD_B64).decode("utf-8")
-    # PWA_HEAD 格式: <link rel="manifest" href="data:application/manifest+json;base64,...">
     start = head.find("base64,")
     if start == -1:
         return "{}"
@@ -25,37 +23,42 @@ def install_manifest_route() -> None:
     if _manifest_added:
         return
     try:
-        from streamlit.runtime import get_instance
+        from streamlit.web.server.starlette import UvicornServer
 
-        runtime = get_instance()
-        server = getattr(runtime, "_server", None)
-        if server is None:
-            return
-        app = getattr(server, "_app", None)
+        app = None
+        for obj in gc.get_objects():
+            if isinstance(obj, UvicornServer):
+                server = getattr(obj, "_server", None)
+                if server is not None:
+                    app = getattr(server, "app", None)
+                if app is not None:
+                    break
+
         if app is None:
+            print("[PWA] Starlette app not found")
             return
 
         manifest_json = _get_manifest_json()
 
-        import tornado.web
+        from starlette.responses import Response
+        from starlette.routing import Route
 
-        class ManifestHandler(tornado.web.RequestHandler):
-            def get(self):
-                self.set_header("Content-Type", "application/manifest+json")
-                self.set_header("Cache-Control", "no-cache")
-                self.write(manifest_json)
+        async def manifest_handler(request):
+            return Response(
+                content=manifest_json,
+                media_type="application/manifest+json",
+                headers={"Cache-Control": "no-cache"},
+            )
 
-        # 插入到路由最前面，覆盖 Streamlit 默认 manifest
-        from tornado.routing import Rule, PathMatches
+        new_route = Route("/-/build/manifest.json", manifest_handler)
 
-        rule = Rule(PathMatches(r"/-/build/manifest\.json"), ManifestHandler)
-        if hasattr(app, "default_router") and hasattr(app.default_router, "rules"):
-            app.default_router.rules.insert(0, rule)
+        # 插入到路由列表最前面
+        routes = getattr(app, "routes", None)
+        if routes is not None:
+            routes.insert(0, new_route)
             _manifest_added = True
-            print("[PWA] manifest route installed")
-        elif hasattr(app, "add_handlers"):
-            app.add_handlers(r".*", [(r"/-/build/manifest\.json", ManifestHandler)])
-            _manifest_added = True
-            print("[PWA] manifest route added (fallback)")
+            print("[PWA] manifest route installed via Starlette")
+        else:
+            print("[PWA] app.routes not found")
     except Exception as e:
         print(f"[PWA] install_manifest_route failed: {e}")
