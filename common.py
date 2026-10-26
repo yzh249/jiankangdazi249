@@ -1,6 +1,5 @@
 """页面公共壳：统一配置、登录校验、移动端样式、侧边栏。"""
 import streamlit as st
-import streamlit.components.v1 as components
 
 import db
 from pwa_head import PWA_HEAD
@@ -22,26 +21,16 @@ MOBILE_CSS = """
 </style>
 """
 
-# 在 iframe 里操作父页面 DOM，移除 Streamlit 默认 manifest/theme-color
-PWA_FIX_HTML = """
-<script>
-function fixPWA() {
-  try {
-    var d = parent.document;
-    d.querySelectorAll('link[rel="manifest"]').forEach(function(l) {
-      if (l.href.indexOf('/-/build/') !== -1) l.remove();
-    });
-    d.querySelectorAll('meta[name="theme-color"]').forEach(function(m) {
-      var c = m.content.toLowerCase();
-      if (c === '#ffffff') m.remove();
-    });
-  } catch(e) {}
-}
-fixPWA();
-setTimeout(fixPWA, 200);
-setTimeout(fixPWA, 1000);
-</script>
-"""
+# 通过 srcdoc iframe（无 sandbox）操作父页面 DOM，移除 Streamlit 默认 manifest/theme-color
+PWA_FIX_HTML = (
+    '<iframe srcdoc=\'<script>'
+    'function f(){try{var d=parent.document;'
+    'd.querySelectorAll("link[rel=manifest]").forEach(function(l){if(l.href.indexOf("/-/build/")!==-1)l.remove();});'
+    'd.querySelectorAll("meta[name=theme-color]").forEach(function(m){if(m.content.toLowerCase()==="#ffffff")m.remove();});'
+    '}catch(e){}}'
+    'f();setTimeout(f,300);setTimeout(f,1500);'
+    '</script>\' style="display:none;width:0;height:0;border:0"></iframe>'
+)
 
 
 def setup(title: str, icon: str = "🥗") -> None:
@@ -49,7 +38,7 @@ def setup(title: str, icon: str = "🥗") -> None:
     db.init_db()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(PWA_HEAD, unsafe_allow_html=True)
-    components.html(PWA_FIX_HTML, height=0, width=0)
+    st.markdown(PWA_FIX_HTML, unsafe_allow_html=True)
 
 
 def require_login() -> int:
