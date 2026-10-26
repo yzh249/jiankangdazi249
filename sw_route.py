@@ -19,6 +19,11 @@ from pwa_head import (
 )
 
 _installed = False
+_last_status = "not run"
+
+
+def pwa_status() -> str:
+    return _last_status
 
 
 def _b64(data: str) -> bytes:
@@ -130,72 +135,102 @@ def _wrap_asgi(app):
     return wrapped
 
 
-def _install_via_uvicorn() -> bool:
+def _install_via_uvicorn(parts) -> bool:
     try:
         import uvicorn
     except Exception as e:
-        print(f"[PWA] uvicorn import failed: {e}")
+        parts.append(f"uvicorn-import:{type(e).__name__}")
         return False
+    parts.append(f"uv{getattr(uvicorn, '__version__', '?')}")
+    wrapped = False
     servers = [o for o in gc.get_objects() if isinstance(o, uvicorn.Server)]
-    print(f"[PWA] uvicorn.Server instances: {len(servers)}")
+    parts.append(f"servers:{len(servers)}")
     for srv in servers:
         cfg = getattr(srv, "config", None)
         app = getattr(cfg, "loaded_app", None) if cfg is not None else None
         if app is None:
             continue
         if getattr(app, "_pwa_wrapped", False):
-            return True
+            wrapped = True
+            break
         cfg.loaded_app = _wrap_asgi(app)
-        print("[PWA] wrapped uvicorn config.loaded_app")
-        return True
-    return False
+        wrapped = True
+        parts.append("wrapped:server")
+        break
+    if not wrapped:
+        cfgs = [
+            o
+            for o in gc.get_objects()
+            if isinstance(o, uvicorn.Config) and getattr(o, "loaded_app", None) is not None
+        ]
+        parts.append(f"cfgs:{len(cfgs)}")
+        for cfg in cfgs:
+            app = cfg.loaded_app
+            if getattr(app, "_pwa_wrapped", False):
+                wrapped = True
+                break
+            cfg.loaded_app = _wrap_asgi(app)
+            wrapped = True
+            parts.append("wrapped:config")
+            break
+    return wrapped
 
 
-def _install_via_starlette() -> bool:
+def _mk_handler(body, ctype, extra):
+    from starlette.responses import Response
+
+    async def handler(request):
+        return Response(content=body, media_type=ctype, headers=extra or {})
+    return handler
+
+
+def _install_via_starlette(parts) -> bool:
     try:
         from starlette.applications import Starlette
-        from starlette.responses import Response
         from starlette.routing import Route
     except Exception as e:
-        print(f"[PWA] starlette import failed: {e}")
+        parts.append(f"starlette-import:{type(e).__name__}")
         return False
+    try:
+        import tornado.web  # noqa: F401  仅用于诊断探测
 
-    def _handler(body, ctype, extra):
-        async def handler(request):
-            return Response(content=body, media_type=ctype, headers=extra or {})
-        return handler
-
+        parts.append("tornado:present")
+    except Exception:
+        pass
+    apps = [o for o in gc.get_objects() if isinstance(o, Starlette)]
+    parts.append(f"stapps:{len(apps)}")
     done = False
-    for obj in gc.get_objects():
-        if isinstance(obj, Starlette):
-            try:
-                routes = obj.router.routes
-                if any(getattr(r, "path", None) == "/sw.js" for r in routes):
-                    return True
-                for path, (body, ctype, extra) in reversed(list(_PATHS.items())):
-                    routes.insert(0, Route(path, _handler(body, ctype, extra), methods=["GET"]))
+    for obj in apps:
+        try:
+            routes = obj.router.routes
+            if any(getattr(r, "path", None) == "/sw.js" for r in routes):
                 done = True
-                print("[PWA] starlette routes inserted")
-            except Exception as e:
-                print(f"[PWA] starlette route insert failed: {e}")
+                break
+            for path, (body, ctype, extra) in reversed(list(_PATHS.items())):
+                routes.insert(0, Route(path, _mk_handler(body, ctype, extra), methods=["GET"]))
+            done = True
+            parts.append("routes-inserted")
+            break
+        except Exception as e:
+            parts.append(f"route-err:{type(e).__name__}")
     return done
 
 
 def install_pwa() -> None:
-    global _installed
+    global _installed, _last_status
     if _installed:
+        _last_status = "PWA:OK installed"
         return
+    parts = []
     try:
-        ok = _install_via_uvicorn()
+        ok = _install_via_uvicorn(parts)
         if not ok:
-            ok = _install_via_starlette()
-        if ok:
-            _installed = True
-            print("[PWA] install ok")
-        else:
-            print("[PWA] install pending, retry on next run")
+            ok = _install_via_starlette(parts)
+        _installed = ok
+        _last_status = ("PWA:OK " if ok else "PWA:FAIL ") + ",".join(parts)
     except Exception as e:
-        print(f"[PWA] install error: {e}")
+        _last_status = f"PWA:ERR {type(e).__name__}: {e}"
+    print(_last_status)
 
 
 def register_sw_component() -> None:
