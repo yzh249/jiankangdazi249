@@ -8,6 +8,7 @@
 """
 import base64
 import gc
+import os
 
 from pwa_head import (
     ICON192M_B64,
@@ -19,11 +20,12 @@ from pwa_head import (
 )
 
 _installed = False
-_last_status = "not run"
+_parts: list = []
 
 
 def pwa_status() -> str:
-    return _last_status
+    tag = "OK" if _installed else "FAIL"
+    return f"PWA:{tag}(pid{os.getpid()}) " + ",".join(_parts)
 
 
 def _b64(data: str) -> bytes:
@@ -148,15 +150,14 @@ def _install_via_uvicorn(parts) -> bool:
     for srv in servers:
         cfg = getattr(srv, "config", None)
         app = getattr(cfg, "loaded_app", None) if cfg is not None else None
+        nsock = len(getattr(srv, "servers", None) or [])
+        parts.append(f"srv(s{nsock},a:{type(app).__name__ if app is not None else 'None'})")
         if app is None:
             continue
-        if getattr(app, "_pwa_wrapped", False):
+        if not getattr(app, "_pwa_wrapped", False):
+            cfg.loaded_app = _wrap_asgi(app)
+            parts.append("wrapped")
             wrapped = True
-            break
-        cfg.loaded_app = _wrap_asgi(app)
-        wrapped = True
-        parts.append("wrapped:server")
-        break
     if not wrapped:
         cfgs = [
             o
@@ -166,13 +167,10 @@ def _install_via_uvicorn(parts) -> bool:
         parts.append(f"cfgs:{len(cfgs)}")
         for cfg in cfgs:
             app = cfg.loaded_app
-            if getattr(app, "_pwa_wrapped", False):
+            if not getattr(app, "_pwa_wrapped", False):
+                cfg.loaded_app = _wrap_asgi(app)
+                parts.append("wrapped:config")
                 wrapped = True
-                break
-            cfg.loaded_app = _wrap_asgi(app)
-            wrapped = True
-            parts.append("wrapped:config")
-            break
     return wrapped
 
 
@@ -191,6 +189,12 @@ def _install_via_starlette(parts) -> bool:
     except Exception as e:
         parts.append(f"starlette-import:{type(e).__name__}")
         return False
+    try:
+        import starlette
+
+        parts.append(f"stl{getattr(starlette, '__version__', '?')}")
+    except Exception:
+        pass
     try:
         import tornado.web  # noqa: F401  仅用于诊断探测
 
@@ -217,20 +221,18 @@ def _install_via_starlette(parts) -> bool:
 
 
 def install_pwa() -> None:
-    global _installed, _last_status
+    global _installed
     if _installed:
-        _last_status = "PWA:OK installed"
         return
-    parts = []
     try:
-        ok = _install_via_uvicorn(parts)
+        _parts.clear()
+        ok = _install_via_uvicorn(_parts)
         if not ok:
-            ok = _install_via_starlette(parts)
+            ok = _install_via_starlette(_parts)
         _installed = ok
-        _last_status = ("PWA:OK " if ok else "PWA:FAIL ") + ",".join(parts)
     except Exception as e:
-        _last_status = f"PWA:ERR {type(e).__name__}: {e}"
-    print(_last_status)
+        _parts.append(f"err:{type(e).__name__}:{str(e)[:60]}")
+    print(pwa_status())
 
 
 def register_sw_component() -> None:
