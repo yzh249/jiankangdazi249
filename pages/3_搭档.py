@@ -16,7 +16,7 @@ partner_id = db.get_partner_id(uid)
 if partner_id:
     partner = db.get_user(partner_id)
     pair = db.get_active_pair(uid)
-    st.success(f"已经和 {partner['nickname']} 绑定（{pair['created_at'][:10]}）")
+    st.success(f"已经和 {partner['public_id']} 绑定（{pair['created_at'][:10]}）")
     st.caption("你们可以看到彼此的打卡记录和当日热量，但都不能修改对方的记录。")
 
     with st.expander("解除搭档关系"):
@@ -28,30 +28,13 @@ if partner_id:
             st.rerun()
 else:
     st.caption("一对一绑定：一个人同一时间只能有一个搭子。")
-    invite = db.latest_invite(uid)
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("我是发起方")
-        st.caption("生成一个 6 位邀请码发给朋友，24 小时内有效。")
-        if st.button("生成新的邀请码", width="stretch"):
-            try:
-                db.create_invite(uid)
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-        if invite:
-            st.code(invite["code"], language=None)
-            st.caption(f"有效期至 {invite['expires_at'][:16]}")
-
-    with c2:
-        st.subheader("我是加入方")
-        st.caption("输入朋友发来的邀请码，立刻绑定。")
-        code = st.text_input("邀请码", max_chars=6, placeholder="例如 7KQ2M9")
-        if st.button("绑定", type="primary", width="stretch"):
-            ok, message = db.bind_invite(code, uid)
-            if ok:
-                st.session_state["pair_flash"] = "绑定成功"
-                st.rerun()
-            else:
-                st.error(message)
+    st.subheader("输入对方 ID 直接绑定")
+    st.caption("让对方先登录一次拿到 ID，然后你在这里输入即可。")
+    partner_id_input = st.text_input("对方 ID", placeholder="例如 apple2024")
+    if st.button("绑定搭子", type="primary", width="stretch"):
+        ok, message = db.bind_by_public_id(uid, partner_id_input)
+        if ok:
+            st.session_state["pair_flash"] = message
+            st.rerun()
+        else:
+            st.error(message)
