@@ -3,6 +3,7 @@ import streamlit as st
 
 import db
 from pwa_head import PWA_HEAD
+from sw_route import install_manifest_route
 
 MOBILE_CSS = """
 <style>
@@ -21,24 +22,13 @@ MOBILE_CSS = """
 </style>
 """
 
-# 通过 srcdoc iframe（无 sandbox）操作父页面 DOM，移除 Streamlit 默认 manifest/theme-color
-PWA_FIX_HTML = (
-    '<iframe srcdoc=\'<script>'
-    'function f(){try{var d=parent.document;'
-    'd.querySelectorAll("link[rel=manifest]").forEach(function(l){if(l.href.indexOf("/-/build/")!==-1)l.remove();});'
-    'd.querySelectorAll("meta[name=theme-color]").forEach(function(m){if(m.content.toLowerCase()==="#ffffff")m.remove();});'
-    '}catch(e){}}'
-    'f();setTimeout(f,300);setTimeout(f,1500);'
-    '</script>\' style="display:none;width:0;height:0;border:0"></iframe>'
-)
-
 
 def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
+    install_manifest_route()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(PWA_HEAD, unsafe_allow_html=True)
-    st.markdown(PWA_FIX_HTML, unsafe_allow_html=True)
 
 
 def require_login() -> int:
