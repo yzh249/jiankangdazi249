@@ -12,10 +12,8 @@ from contextlib import closing
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-UPLOAD_DIR = DATA_DIR / "uploads"
-DB_PATH = DATA_DIR / "app.db"
-
+# 先判断有没有 Postgres URL（env + secrets），再决定本地文件落哪
+# 源码目录在云端只读；没配 Postgres 时 SQLite 和上传文件统一放 /tmp
 # 云端服务器不在国内时区，「今天/现在」统一按 UTC+8 取
 TZ = dt.timezone(dt.timedelta(hours=8))
 
@@ -35,13 +33,27 @@ DATABASE_URL = _database_url()
 USE_PG = bool(DATABASE_URL)
 
 if USE_PG:
-    import psycopg2
-    import psycopg2.extras
-    if "sslmode=" not in DATABASE_URL:
-        DATABASE_URL += ("&" if "?" in DATABASE_URL else "?") + "sslmode=require"
-    _IntegrityError = psycopg2.IntegrityError
+    # Postgres 模式图片存 DB，DATA_DIR 基本不用
+    DATA_DIR = Path("/tmp/jiankangdazi")
+    try:
+        import psycopg2
+        import psycopg2.extras
+        if "sslmode=" not in DATABASE_URL:
+            DATABASE_URL += ("&" if "?" in DATABASE_URL else "?") + "sslmode=require"
+        _IntegrityError = psycopg2.IntegrityError
+    except Exception as exc:
+        # 没装 psycopg2 或平台不支持 → 回退 SQLite
+        import sys
+        print(f"⚠️ psycopg2 import failed, falling back to SQLite: {exc}", file=sys.stderr)
+        USE_PG = False
+        _IntegrityError = sqlite3.IntegrityError
 else:
+    # SQLite 模式：桌面 → 应用目录；云端 Linux → /tmp（源码只读）
+    DATA_DIR = Path("/tmp/jiankangdazi") if os.name != "nt" else (BASE_DIR / "data")
     _IntegrityError = sqlite3.IntegrityError
+
+UPLOAD_DIR = DATA_DIR / "uploads"
+DB_PATH = DATA_DIR / "app.db"
 
 SCHEMA_SQLITE = """
 CREATE TABLE IF NOT EXISTS users (
