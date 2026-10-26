@@ -1,5 +1,6 @@
 """页面公共壳：统一配置、登录校验、移动端样式、侧边栏。"""
 import streamlit as st
+import streamlit.components.v1 as components
 
 import db
 from pwa_head import PWA_HEAD
@@ -21,12 +22,30 @@ MOBILE_CSS = """
 </style>
 """
 
+# 移除 Streamlit 默认 manifest，让我们自己的 manifest 生效
+PWA_FIX_HTML = """
+<script>
+try {
+  var docs = [document, parent.document];
+  docs.forEach(function(d) {
+    d.querySelectorAll('link[rel="manifest"]').forEach(function(l) {
+      if (l.href.indexOf('/-/build/') !== -1) l.remove();
+    });
+    d.querySelectorAll('meta[name="theme-color"]').forEach(function(m) {
+      if (m.content === '#FFFFFF' || m.content === '#ffffff') m.remove();
+    });
+  });
+} catch(e) {}
+</script>
+"""
+
 
 def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(PWA_HEAD, unsafe_allow_html=True)
+    components.html(PWA_FIX_HTML, height=0, width=0)
 
 
 def require_login() -> int:
