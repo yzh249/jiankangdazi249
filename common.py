@@ -6,7 +6,7 @@ import db
 MOBILE_CSS = """
 <style>
 @media (max-width: 820px) {
-  .block-container { padding: 1rem 0.75rem 4rem 0.75rem; max-width: 100%; }
+  .block-container { padding: 2.5rem 0.75rem 4rem 0.75rem; max-width: 100%; }
   h1 { font-size: 1.45rem; }
   h2 { font-size: 1.2rem; }
   h3 { font-size: 1.05rem; }
@@ -22,7 +22,7 @@ MOBILE_CSS = """
 
 
 def setup(title: str, icon: str = "🥗") -> None:
-    st.set_page_config(page_title=f"{title} · 减肥搭子", page_icon=icon, layout="wide")
+    st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
 
