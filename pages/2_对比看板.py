@@ -28,13 +28,13 @@ if partner:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric(f"我 · {me['nickname']}", f"{mine['kcal']:.0f} 千卡")
+        st.metric(f"我 · {me['public_id']}", f"{mine['kcal']:.0f} 千卡")
         st.progress(
             min(mine["kcal"] / my_target, 1.0) if my_target else 0.0,
             text=f"目标 {my_target:.0f} 千卡",
         )
     with c2:
-        st.metric(f"搭子 · {partner['nickname']}", f"{theirs['kcal']:.0f} 千卡")
+        st.metric(f"搭子 · {partner['public_id']}", f"{theirs['kcal']:.0f} 千卡")
         st.progress(
             min(theirs["kcal"] / partner_target, 1.0) if partner_target else 0.0,
             text=f"目标 {partner_target:.0f} 千卡",
@@ -45,8 +45,8 @@ if partner:
         st.caption("正数表示你比搭子吃得多")
 
     st.info(nutrition.daily_message(
-        me["nickname"], mine["kcal"], my_target,
-        partner["nickname"], theirs["kcal"], partner_target,
+        me["public_id"], mine["kcal"], my_target,
+        partner["public_id"], theirs["kcal"], partner_target,
     ))
 else:
     c1, c2 = st.columns(2)
@@ -66,8 +66,8 @@ days = st.radio("范围", [7, 30], format_func=lambda d: f"近 {d} 天", horizon
 start = (today - timedelta(days=days - 1)).isoformat()
 
 rows = []
-for person_id, label in [(uid, me["nickname"])] + (
-    [(partner_id, partner["nickname"])] if partner else []
+for person_id, label in [(uid, me["public_id"])] + (
+    [(partner_id, partner["public_id"])] if partner else []
 ):
     for r in db.daily_totals(person_id, start, today_str):
         rows.append({"日期": r["d"], "热量": r["kcal"], "谁": label})
@@ -98,7 +98,7 @@ view_day = st.date_input("查看日期", value=today, key="history_day")
 view_str = view_day.isoformat()
 
 columns = st.columns(2) if partner else st.columns(1)
-people = [(uid, me["nickname"])] + ([(partner_id, partner["nickname"])] if partner else [])
+people = [(uid, me["public_id"])] + ([(partner_id, partner["public_id"])] if partner else [])
 for col, (person_id, label) in zip(columns, people):
     with col:
         total = db.day_total(person_id, view_str)
