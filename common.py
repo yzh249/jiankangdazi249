@@ -1,10 +1,8 @@
 """页面公共壳：统一配置、登录校验、移动端样式、侧边栏。"""
 import streamlit as st
-import streamlit.components.v1 as components
 
 import db
 from pwa_head import PWA_HEAD
-from sw_route import add_sw_route
 
 MOBILE_CSS = """
 <style>
@@ -23,24 +21,12 @@ MOBILE_CSS = """
 </style>
 """
 
-SW_REGISTER_HTML = """
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js', { scope: '/' })
-    .then(function(reg) { console.log('PWA SW registered:', reg.scope); })
-    .catch(function(err) { console.log('PWA SW failed:', err); });
-}
-</script>
-"""
-
 
 def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
-    add_sw_route()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(PWA_HEAD, unsafe_allow_html=True)
-    components.html(SW_REGISTER_HTML, height=0, width=0)
 
 
 def require_login() -> int:
