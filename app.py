@@ -75,7 +75,7 @@ if st.session_state.get("user_id"):
     render_home(int(st.session_state["user_id"]))
     st.stop()
 
-st.title("🥗 减肥搭子")
+st.title("🥗 健康搭子")
 st.caption("双人饮食热量监督 · 拍照识别 · 互相可见 · 只给熟人用")
 
 tab_login, tab_register = st.tabs(["登录", "注册"])
