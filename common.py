@@ -20,11 +20,26 @@ MOBILE_CSS = """
 </style>
 """
 
+PWA_HEAD = """
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#4caf50">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function() {
+    navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
+      .catch(function(err) { console.log('SW reg failed:', err); });
+  });
+}
+</script>
+"""
+
 
 def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
+    st.markdown(PWA_HEAD, unsafe_allow_html=True)
 
 
 def require_login() -> int:
