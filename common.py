@@ -22,9 +22,25 @@ MOBILE_CSS = """
 </style>
 """
 
-# 移除 Streamlit 默认 manifest/theme-color，让我们自己的 PWA 配置生效
+# 在 iframe 里操作父页面 DOM，移除 Streamlit 默认 manifest/theme-color
 PWA_FIX_HTML = """
-<img src="x" style="display:none" onerror="(function(){try{var d=document;d.querySelectorAll('link[rel=manifest]').forEach(function(l){if(l.href.indexOf('/-/build/')!==-1)l.remove();});d.querySelectorAll('meta[name=theme-color]').forEach(function(m){if(m.content==='#FFFFFF'||m.content==='#ffffff')m.remove();});}catch(e){}})()">
+<script>
+function fixPWA() {
+  try {
+    var d = parent.document;
+    d.querySelectorAll('link[rel="manifest"]').forEach(function(l) {
+      if (l.href.indexOf('/-/build/') !== -1) l.remove();
+    });
+    d.querySelectorAll('meta[name="theme-color"]').forEach(function(m) {
+      var c = m.content.toLowerCase();
+      if (c === '#ffffff') m.remove();
+    });
+  } catch(e) {}
+}
+fixPWA();
+setTimeout(fixPWA, 200);
+setTimeout(fixPWA, 1000);
+</script>
 """
 
 
@@ -33,7 +49,7 @@ def setup(title: str, icon: str = "🥗") -> None:
     db.init_db()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(PWA_HEAD, unsafe_allow_html=True)
-    st.markdown(PWA_FIX_HTML, unsafe_allow_html=True)
+    components.html(PWA_FIX_HTML, height=0, width=0)
 
 
 def require_login() -> int:
