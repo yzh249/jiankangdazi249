@@ -2,7 +2,7 @@
 import streamlit as st
 
 import db
-from sw_route import install_pwa, register_sw_component
+from sw_route import install_pwa, pwa_status, register_sw_component
 
 MOBILE_CSS = """
 <style>
@@ -27,6 +27,7 @@ def setup(title: str, icon: str = "🥗") -> None:
     db.init_db()
     install_pwa()
     register_sw_component()
+    st.caption(f"{st.__version__} · {pwa_status()}")
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
 
 
