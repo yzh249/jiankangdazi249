@@ -16,9 +16,9 @@ def render_home(uid: int) -> None:
     mine = db.day_total(uid, today)
 
     with st.sidebar:
-        st.markdown(f"### 🥗 {user['nickname']}")
+        st.markdown(f"### 🥗 {user['public_id']}")
         if partner_id:
-            st.caption(f"👫 搭子：{db.get_user(partner_id)['nickname']}")
+            st.caption(f"👫 搭子：{db.get_user(partner_id)['public_id']}")
         else:
             st.caption("👫 还没绑定搭子")
         st.divider()
@@ -30,7 +30,7 @@ def render_home(uid: int) -> None:
             st.session_state.pop("user_id", None)
             st.rerun()
 
-    st.title(f"你好，{user['nickname']} 👋")
+    st.title(f"你好，{user['public_id']} 👋")
     st.caption("今天也一起好好吃饭。数据只给你和搭子看。")
 
     if not profile:
@@ -51,11 +51,11 @@ def render_home(uid: int) -> None:
         theirs = db.day_total(partner_id, today)
         diff = mine["kcal"] - theirs["kcal"]
         st.caption(
-            f"搭子 {partner['nickname']} 今天吃了 {theirs['kcal']:.0f} 千卡，"
+            f"搭子 {partner['public_id']} 今天吃了 {theirs['kcal']:.0f} 千卡，"
             + (f"你比 TA 多 {diff:.0f} 千卡。" if diff >= 0 else f"你比 TA 少 {abs(diff):.0f} 千卡。")
         )
     else:
-        st.info("还没有搭子。生成一个邀请码，发给朋友就能互相监督。")
+        st.info("还没有搭子。在搭档管理里输入对方 ID 就能直接绑定。")
         st.page_link("pages/3_搭档.py", label="去绑定搭子", icon="🤝")
 
     st.divider()
@@ -78,39 +78,19 @@ if st.session_state.get("user_id"):
 st.title("🥗 健康搭子")
 st.caption("双人饮食热量监督 · 拍照识别 · 互相可见 · 只给熟人用")
 
-tab_login, tab_register = st.tabs(["登录", "注册"])
-
-with tab_login:
-    with st.form("login_form"):
-        nick = st.text_input("昵称", placeholder="2-12 个字符")
-        pin = st.text_input("4 位 PIN", type="password", max_chars=4)
-        submitted = st.form_submit_button("登录", type="primary", width="stretch")
-    if submitted:
-        uid = db.verify_user(nick, pin)
-        if uid:
-            st.session_state["user_id"] = uid
-            st.rerun()
-        else:
-            st.error("昵称或 PIN 不对")
-
-with tab_register:
-    with st.form("register_form"):
-        nick = st.text_input("昵称", placeholder="和朋友互相认得出的名字")
-        pin = st.text_input("设置 4 位数字 PIN", type="password", max_chars=4)
-        submitted = st.form_submit_button("注册", type="primary", width="stretch")
-    if submitted:
-        nick = nick.strip()
-        if not (2 <= len(nick) <= 12):
-            st.error("昵称需要 2-12 个字符")
-        elif not (len(pin) == 4 and pin.isdigit()):
-            st.error("PIN 必须是 4 位数字")
-        else:
-            try:
-                uid = db.create_user(nick, pin)
-                st.session_state["user_id"] = uid
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
+with st.form("id_form"):
+    public_id = st.text_input("你的 ID", placeholder="随便起一个，字母数字都行，没注册会自动帮你创建")
+    submitted = st.form_submit_button("登录 / 注册", type="primary", width="stretch")
+if submitted:
+    public_id = (public_id or "").strip()
+    if not public_id:
+        st.error("请输入 ID")
+    elif len(public_id) > 32:
+        st.error("ID 太长了，32 个字符以内")
+    else:
+        uid = db.get_or_create_user(public_id)
+        st.session_state["user_id"] = uid
+        st.rerun()
 
 with st.expander("它能做什么"):
     st.markdown(
@@ -118,6 +98,7 @@ with st.expander("它能做什么"):
         - 📸 拍张照片，自动识别食物和分量
         - ✍️ AI 估错一眼就能改，热量实时重算
         - 📊 和搭子并排看今天吃了多少
+        - 🤝 输入对方 ID 直接绑定，不用邀请码
         - 🤖 温和的饮食点评，不制造焦虑
         """
     )
