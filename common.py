@@ -3,7 +3,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 import db
-from pwa_head import PWA_HEAD, SW_B64
+from pwa_head import PWA_HEAD
+from sw_route import add_sw_route
 
 MOBILE_CSS = """
 <style>
@@ -22,17 +23,13 @@ MOBILE_CSS = """
 </style>
 """
 
-SW_REGISTER_HTML = f"""
+SW_REGISTER_HTML = """
 <script>
-try {{
-  var swBlob = new Blob([atob('{SW_B64}')], {{type: 'application/javascript'}});
-  var swUrl = URL.createObjectURL(swBlob);
-  if ('serviceWorker' in navigator) {{
-    navigator.serviceWorker.register(swUrl, {{ scope: '/' }})
-      .then(function(reg) {{ console.log('PWA SW registered, scope:', reg.scope); }})
-      .catch(function(err) {{ console.log('PWA SW failed:', err); }});
-  }}
-}} catch(e) {{ console.log('PWA SW error:', e); }}
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js', { scope: '/' })
+    .then(function(reg) { console.log('PWA SW registered:', reg.scope); })
+    .catch(function(err) { console.log('PWA SW failed:', err); });
+}
 </script>
 """
 
@@ -40,6 +37,7 @@ try {{
 def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
+    add_sw_route()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
     st.markdown(PWA_HEAD, unsafe_allow_html=True)
     components.html(SW_REGISTER_HTML, height=0, width=0)
