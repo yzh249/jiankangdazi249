@@ -220,6 +220,44 @@ def _install_via_starlette(parts) -> bool:
     return done
 
 
+def _install_protocol_patch(parts) -> bool:
+    """终极钩子：修改 uvicorn HTTP 协议类构造，每个新连接强制过一遍包装。"""
+    try:
+        from uvicorn.protocols.http import h11_impl
+    except Exception as e:
+        parts.append(f"proto-import:{type(e).__name__}")
+        return False
+    targets = []
+    try:
+        from uvicorn.protocols.http import httptools_impl
+
+        targets.append(("httptools", httptools_impl.HttpToolsProtocol))
+    except Exception:
+        pass
+    targets.append(("h11", h11_impl.H11Protocol))
+    ok = False
+    for name, cls in targets:
+        if getattr(cls, "_pwa_patched", False):
+            ok = True
+            continue
+        orig_init = cls.__init__
+
+        def patched_init(self, *a, __orig=orig_init, **kw):
+            __orig(self, *a, **kw)
+            try:
+                app = getattr(self, "app", None)
+                if app is not None and not getattr(app, "_pwa_wrapped", False):
+                    self.app = _wrap_asgi(app)
+            except Exception:
+                pass
+
+        cls.__init__ = patched_init
+        cls._pwa_patched = True
+        parts.append(f"patched:{name}")
+        ok = True
+    return ok
+
+
 def install_pwa() -> None:
     global _installed
     if _installed:
@@ -229,6 +267,8 @@ def install_pwa() -> None:
         ok = _install_via_uvicorn(_parts)
         if not ok:
             ok = _install_via_starlette(_parts)
+        if _install_protocol_patch(_parts):
+            ok = True
         _installed = ok
     except Exception as e:
         _parts.append(f"err:{type(e).__name__}:{str(e)[:60]}")
