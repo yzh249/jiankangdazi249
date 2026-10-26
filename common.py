@@ -2,6 +2,7 @@
 import streamlit as st
 
 import db
+from pwa_head import PWA_HEAD
 
 MOBILE_CSS = """
 <style>
@@ -18,20 +19,6 @@ MOBILE_CSS = """
   input, textarea { font-size: 16px !important; }
 }
 </style>
-"""
-
-PWA_HEAD = """
-<link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#4caf50">
-<link rel="apple-touch-icon" href="/static/icon-192.png">
-<script>
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', function() {
-    navigator.serviceWorker.register('/static/sw.js', { scope: '/' })
-      .catch(function(err) { console.log('SW reg failed:', err); });
-  });
-}
-</script>
 """
 
 
