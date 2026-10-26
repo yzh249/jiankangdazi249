@@ -40,10 +40,10 @@ def sidebar() -> None:
     uid = int(st.session_state["user_id"])
     user = db.get_user(uid)
     partner_id = db.get_partner_id(uid)
-    partner_name = db.get_user(partner_id)["nickname"] if partner_id else None
+    partner_name = db.get_user(partner_id)["public_id"] if partner_id else None
 
     with st.sidebar:
-        st.markdown(f"### 🥗 {user['nickname'] if user else ''}")
+        st.markdown(f"### 🥗 {user['public_id'] if user else ''}")
         st.caption(f"👫 搭子：{partner_name}" if partner_name else "👫 还没绑定搭子")
         st.divider()
         with st.expander("⚙️ AI Key"):
