@@ -49,14 +49,6 @@ if partner and show_partner:
     people.append((partner_id, partner["public_id"]))
 
 
-def _collect(rows_builder, val_key: str):
-    rows = []
-    for pid, label in people:
-        for r in rows_builder(pid):
-            rows.append({"日期": r["d"], val_key: float(r[val_key]), "谁": label})
-    return rows
-
-
 st.markdown("**① 每日摄入热量变化**")
 kcal_rows = []
 for pid, label in people:
