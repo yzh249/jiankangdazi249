@@ -141,6 +141,19 @@ CREATE TABLE IF NOT EXISTS weights (
     created_at TEXT NOT NULL,
     UNIQUE (user_id, record_date)
 );
+
+CREATE TABLE IF NOT EXISTS user_foods (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kcal REAL NOT NULL DEFAULT 0,
+    carb REAL NOT NULL DEFAULT 0,
+    protein REAL NOT NULL DEFAULT 0,
+    fat REAL NOT NULL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT '菜品',
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, name)
+);
 """
 
 SCHEMA_PG = """
@@ -229,6 +242,19 @@ CREATE TABLE IF NOT EXISTS weights (
     note TEXT,
     created_at TEXT NOT NULL,
     UNIQUE (user_id, record_date)
+);
+
+CREATE TABLE IF NOT EXISTS user_foods (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kcal REAL NOT NULL DEFAULT 0,
+    carb REAL NOT NULL DEFAULT 0,
+    protein REAL NOT NULL DEFAULT 0,
+    fat REAL NOT NULL DEFAULT 0,
+    category TEXT NOT NULL DEFAULT '菜品',
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, name)
 );
 """
 
@@ -338,6 +364,15 @@ def init_db() -> None:
             conn.commit()
         conn.executescript(SCHEMA_PG if USE_PG else SCHEMA_SQLITE)
         conn.commit()
+        # 迁移：user_foods 补 category 列（老表无此列，容错忽略）
+        try:
+            if USE_PG:
+                conn.execute("ALTER TABLE user_foods ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '菜品'")
+            else:
+                conn.execute("ALTER TABLE user_foods ADD COLUMN category TEXT NOT NULL DEFAULT '菜品'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
     _inited = True
 
 
@@ -874,3 +909,52 @@ def get_image(image_ref: str | None):
         return bytes(row["data"]) if row else None
     p = BASE_DIR / image_ref
     return str(p) if p.exists() else None
+
+# ---------- 自定义食物库 ----------
+
+def add_user_food(user_id: int, name: str, kcal: float, carb: float,
+                  protein: float, fat: float,
+                  category: str = "菜品") -> tuple[bool, str]:
+    """新增自定义食物。名称重复时返回 (False, 提示)。"""
+    name = (name or "").strip()
+    if not name:
+        return False, "食物名称不能为空"
+    if kcal < 0 or carb < 0 or protein < 0 or fat < 0:
+        return False, "营养数值不能为负数"
+    if category not in RECORD_TYPES and category not in (
+            "主食", "蛋白质", "蔬菜", "水果", "油脂", "菜品", "饮品", "零食"):
+        category = "菜品"
+    with closing(get_conn()) as conn:
+        exists = conn.execute(
+            "SELECT id FROM user_foods WHERE user_id = ? AND name = ?",
+            (user_id, name),
+        ).fetchone()
+        if exists:
+            return False, f"「{name}」已在你的自定义库里"
+        conn.execute(
+            "INSERT INTO user_foods (user_id, name, kcal, carb, protein, fat, category, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, name, kcal, carb, protein, fat, category, now()),
+        )
+        conn.commit()
+    return True, f"已添加自定义食物「{name}」"
+
+
+def list_user_foods(user_id: int) -> list[dict]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            "SELECT id, user_id, name, kcal, carb, protein, fat, category, created_at "
+            "FROM user_foods WHERE user_id = ? ORDER BY id DESC",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_user_food(food_id: int, user_id: int) -> bool:
+    with closing(get_conn()) as conn:
+        cur = conn.execute(
+            "DELETE FROM user_foods WHERE id = ? AND user_id = ?",
+            (food_id, user_id),
+        )
+        conn.commit()
+    return cur.rowcount > 0

@@ -15,12 +15,13 @@ TIMEOUT = 60
 
 RECOGNIZE_PROMPT = """你是营养师助手，请识别这张食物照片。
 只输出一个 JSON，不要解释、不要代码块标记，格式：
-{"foods":[{"name":"食物名","grams":估计熟重克数,"confidence":0到1}],"overall_confidence":0到1,"note":"可选"}
+{"foods":[{"name":"食物名","grams":估计熟重克数,"confidence":0到1,"kcal_per_100g":每100克热量千卡,"carb_per_100g":每100克碳水克,"protein_per_100g":每100克蛋白质克,"fat_per_100g":每100克脂肪克,"category":"主食|蛋白质|蔬菜|水果|油脂|菜品|饮品|零食"}],"overall_confidence":0到1}
 要求：
-1. name 用中文常见名，尽量简单，例如 米饭、鸡胸肉、西兰花。
+1. name 用中文常见名，尽量贴近基础食材或常见家常菜，例如 米饭、鸡胸肉、清炒西兰花、番茄炒蛋。
 2. grams 按图中可见分量估计（熟重），单份通常 50-300 克。
-3. 看不清或拿不准时把 confidence 调低，不要编造不存在的食物。
-4. 最多 8 项；如果完全看不出是食物，返回空的 foods。"""
+3. 对每个食物按常识估算每100克（熟重）的热量与三大营养素，数值大致合理即可，不必精确到小数。
+4. category 从给定类别里选一个，蔬菜指青菜类叶菜/瓜茄类等低热量菜。
+5. 看不清或拿不准时把 confidence 调低，不要编造不存在的食物；最多 8 项；完全看不出是食物就返回空的 foods。"""
 
 REVIEW_PROMPT = """你是一个温和的饮食搭子，不是医生。根据下面这一餐的数据，写 2 句话点评。
 要求：口语化、具体、不制造负罪感，不要说“暴食/失败/超标惩罚”，不做疾病或营养诊断。
@@ -140,7 +141,22 @@ def recognize_food(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
             conf = float(item.get("confidence") or 0)
         except (TypeError, ValueError):
             conf = 0.0
-        foods.append({"name": name, "grams": grams, "confidence": conf})
+        est = None
+        if any(k in item for k in
+               ("kcal_per_100g", "carb_per_100g", "protein_per_100g", "fat_per_100g")):
+            est = {}
+            for key in ("kcal_per_100g", "carb_per_100g", "protein_per_100g", "fat_per_100g"):
+                try:
+                    est[key] = float(item.get(key) or 0)
+                except (TypeError, ValueError):
+                    est[key] = 0.0
+            cat = str(item.get("category") or "").strip()
+            est["category"] = cat if cat in (
+                "主食", "蛋白质", "蔬菜", "水果", "油脂", "菜品", "饮品", "零食"
+            ) else "菜品"
+        foods.append({
+            "name": name, "grams": grams, "confidence": conf, "est": est,
+        })
 
     try:
         overall = float(data.get("overall_confidence") or 0)

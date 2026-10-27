@@ -182,7 +182,8 @@ def edit_meal_dialog(meal_id: int):
             st.error("至少保留一条有效的食物明细。")
             return
         details, totals = nutrition.analyze(
-            [{"食物": i["name"], "克数": i["grams"]} for i in cleaned]
+            [{"食物": i["name"], "克数": i["grams"]} for i in cleaned],
+            user_id=uid,
         )
         if not details:
             st.error("请填写有效的食物名称和克数。")

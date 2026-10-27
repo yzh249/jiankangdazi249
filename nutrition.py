@@ -32,25 +32,83 @@ def _clean_name(name: str) -> str:
     return s.replace(" ", "")
 
 
+@lru_cache(maxsize=1)
+def _food_index() -> tuple[list[dict], list[tuple[str, int]], list[tuple[str, int]]]:
+    """预构建全局食物库索引: (rows, [(clean主名, 行号)], [(clean别名, 行号)])。"""
+    df = load_foods()
+    rows = df.to_dict("records")
+    main, aliases = [], []
+    for i, r in enumerate(rows):
+        main.append((_clean_name(r["name"]), i))
+        for a in str(r.get("aliases") or "").split("|"):
+            k = _clean_name(a)
+            if k:
+                aliases.append((k, i))
+    return rows, main, aliases
+
+
 @lru_cache(maxsize=512)
 def match_food(name: str) -> dict | None:
-    """先在本地食物库里做包含匹配，再退化为模糊匹配，匹配不到就返回 None。"""
+    """全局库匹配: 精确 > 主名包含(最长优先) > 别名包含 > 模糊。"""
     key = _clean_name(name)
     if not key:
         return None
-    df = load_foods()
-    for _, row in df.iterrows():
-        names = [row["name"], *[a for a in str(row["aliases"]).split("|") if a]]
-        for n in names:
-            if key == n or (len(n) >= 2 and (n in key or key in n)):
-                return row.to_dict()
-    candidates = list(df["name"]) + [
-        a for al in df["aliases"] for a in str(al).split("|") if a
-    ]
-    close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.6)
-    if not close:
+    rows, main, aliases = _food_index()
+    for k, i in main:
+        if k == key:
+            return rows[i]
+    for k, i in aliases:
+        if k == key:
+            return rows[i]
+    best = None
+    for k, i in main:
+        if len(k) >= 2 and (k in key or key in k):
+            if best is None or len(k) > len(best[0]):
+                best = (k, i)
+    if best is None:
+        for k, i in aliases:
+            if len(k) >= 2 and (k in key or key in k):
+                if best is None or len(k) > len(best[0]):
+                    best = (k, i)
+    if best:
+        return rows[best[1]]
+    candidates = [k for k, _ in main] + [k for k, _ in aliases]
+    close = difflib.get_close_matches(key, candidates, n=1, cutoff=0.55)
+    if close:
+        for k, i in main + aliases:
+            if k == close[0]:
+                return rows[i]
+    return None
+
+
+def match_user_food(name: str, user_id: int) -> dict | None:
+    """自定义食物库匹配（用户自录优先）。user_id 为空时跳过。"""
+    if not user_id:
         return None
-    return df[df["name"] == close[0]].iloc[0].to_dict()
+    import db
+    key = _clean_name(name)
+    if not key:
+        return None
+    foods = db.list_user_foods(user_id)
+    for f in foods:
+        if _clean_name(f["name"]) == key:
+            return f
+    best = None
+    for f in foods:
+        k = _clean_name(f["name"])
+        if len(k) >= 2 and (k in key or key in k):
+            if best is None or len(k) > len(best[0]):
+                best = (k, f)
+    if best:
+        return best[1]
+    close = difflib.get_close_matches(
+        key, [_clean_name(f["name"]) for f in foods], n=1, cutoff=0.55
+    )
+    if close:
+        for f in foods:
+            if _clean_name(f["name"]) == close[0]:
+                return f
+    return None
 
 
 def calc_item(food: dict | None, grams: float) -> dict:
@@ -66,10 +124,39 @@ def calc_item(food: dict | None, grams: float) -> dict:
     }
 
 
-def analyze(rows: list[dict]) -> tuple[list[dict], dict]:
-    """rows: [{'食物': ..., '克数': ...}]，返回明细与合计。"""
+def _est_item(est: dict | None, grams: float) -> dict | None:
+    """AI 估算条目 -> 营养明细。est 缺失或无效返回 None。"""
+    if not est:
+        return None
+    try:
+        kcal_p100 = float(est.get("kcal_per_100g") or 0)
+        carb_p100 = float(est.get("carb_per_100g") or 0)
+        protein_p100 = float(est.get("protein_per_100g") or 0)
+        fat_p100 = float(est.get("fat_per_100g") or 0)
+    except (TypeError, ValueError):
+        return None
+    if kcal_p100 <= 0 and carb_p100 <= 0 and protein_p100 <= 0 and fat_p100 <= 0:
+        return None
+    ratio = max(float(grams), 0) / 100
+    return {
+        "matched": False,
+        "estimated": True,
+        "kcal": round(kcal_p100 * ratio, 1),
+        "carb": round(carb_p100 * ratio, 1),
+        "protein": round(protein_p100 * ratio, 1),
+        "fat": round(fat_p100 * ratio, 1),
+    }
+
+
+def analyze(rows: list[dict], *, user_id: int | None = None,
+            ai_est: dict[str, dict] | None = None) -> tuple[list[dict], dict]:
+    """rows: [{'食物': ..., '克数': ...}]，返回明细与合计。
+
+    匹配优先级: 自定义库 > 全局库 > AI 估算。ai_est: {食物名: 估算营养 dict}。
+    """
     details: list[dict] = []
     totals = {"kcal": 0.0, "carb": 0.0, "protein": 0.0, "fat": 0.0, "veg_grams": 0.0}
+    ai_est = ai_est or {}
     for r in rows:
         raw_name = r.get("食物")
         raw_grams = r.get("克数")
@@ -84,22 +171,43 @@ def analyze(rows: list[dict]) -> tuple[list[dict], dict]:
             grams = 0.0
         if not name or grams <= 0:
             continue
-        food = match_food(name)
-        item = calc_item(food, grams)
+        food = match_user_food(name, user_id)
+        source, matched_name = "自定义库", None
+        if food is None:
+            food = match_food(name)
+            source = "数据库"
+        if food is not None:
+            matched_name = food["name"]
+            item = calc_item(food, grams)
+            category = food.get("category") or "菜品"
+        else:
+            est = r.get("est") or ai_est.get(name) or next(
+                (v for k, v in ai_est.items() if _clean_name(k) == _clean_name(name)), None
+            )
+            item = _est_item(est, grams)
+            if item is not None:
+                source, matched_name = "AI估算", name
+                category = est.get("category", "菜品")
+            else:
+                item = calc_item(None, grams)
+                source, matched_name = "未匹配", "未匹配（按 0 计算）"
+                category = ""
         details.append({
             "食物": name,
             "克数": grams,
-            "匹配": food["name"] if food else "未匹配（按 0 计算）",
+            "匹配": matched_name,
             "热量": item["kcal"],
             "碳水": item["carb"],
             "蛋白": item["protein"],
             "脂肪": item["fat"],
-            "类别": food["category"] if food else "",
+            "类别": category,
             "matched": item["matched"],
+            "estimated": item.get("estimated", False),
+            "来源": source,
         })
         for k in ("kcal", "carb", "protein", "fat"):
             totals[k] += item[k]
-        if food and food["category"] == "蔬菜":
+        if category == "蔬菜":
             totals["veg_grams"] += grams
     totals = {k: round(v, 1) for k, v in totals.items()}
     return details, totals

@@ -20,15 +20,19 @@ st.title("今日打卡")
 # ---------- 饮食记录：食物明细行编辑 ----------
 
 def set_items(pairs) -> None:
-    """pairs: [(食物名, 克数)]，为空时给一行空白。"""
+    """pairs: [(食物名, 克数)] 或 [(食物名, 克数, AI估算dict)]，为空时给一行空白。"""
     seq = 0
     items = []
-    for name, grams in pairs:
+    for entry in pairs:
         seq += 1
-        items.append({"id": seq, "name": name, "grams": float(grams or 0)})
+        if len(entry) >= 3:
+            name, grams, est = entry[0], entry[1], entry[2]
+        else:
+            name, grams, est = entry[0], entry[1], None
+        items.append({"id": seq, "name": name, "grams": float(grams or 0), "est": est})
     if not items:
         seq += 1
-        items.append({"id": seq, "name": "", "grams": 100.0})
+        items.append({"id": seq, "name": "", "grams": 100.0, "est": None})
     st.session_state["row_seq"] = seq
     st.session_state["items_gen"] = st.session_state.get("items_gen", 0) + 1
     st.session_state["items"] = items
@@ -37,10 +41,51 @@ def set_items(pairs) -> None:
 def add_item() -> None:
     seq = st.session_state.get("row_seq", 0) + 1
     st.session_state["row_seq"] = seq
-    st.session_state["items"].append({"id": seq, "name": "", "grams": 100.0})
+    st.session_state["items"].append({"id": seq, "name": "", "grams": 100.0, "est": None})
 
 
 def render_meal_form() -> None:
+    with st.expander("📚 我的食物库（自定义）"):
+        my_foods = db.list_user_foods(uid)
+        if my_foods:
+            for f in my_foods:
+                c1, c2 = st.columns([5, 1], vertical_alignment="center")
+                c1.markdown(
+                    f"**{f['name']}** · {f['kcal']:.0f} 千卡/100g"
+                    f"（碳水 {f['carb']:.0f} · 蛋白 {f['protein']:.0f} · 脂肪 {f['fat']:.0f}）"
+                )
+                if c2.button("删", key=f"del_uf_{f['id']}", help="删除这条自定义食物"):
+                    try:
+                        if db.delete_user_food(f["id"], uid):
+                            flash(f"已删除「{f['name']}」")
+                        else:
+                            flash("删除失败：记录不存在", "error")
+                    except Exception as exc:
+                        flash(f"删除失败：{exc}", "error")
+                    st.rerun()
+        else:
+            st.caption("还没有自定义食物。把常吃但库里没有的菜录进来，以后识别或计算会优先用它。")
+        with st.form("add_user_food_form"):
+            f_name = st.text_input("食物名", key="uf_name",
+                                   placeholder="如：外婆家红烧肉")
+            fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+            f_kcal = fc1.number_input("千卡/100g", 0.0, 1000.0, 200.0, key="uf_kcal")
+            f_carb = fc2.number_input("碳水g", 0.0, 100.0, 10.0, key="uf_carb")
+            f_protein = fc3.number_input("蛋白g", 0.0, 100.0, 10.0, key="uf_protein")
+            f_fat = fc4.number_input("脂肪g", 0.0, 100.0, 10.0, key="uf_fat")
+            f_cat = fc5.selectbox("类别", ["主食", "蛋白质", "蔬菜", "水果", "油脂", "菜品", "饮品", "零食"],
+                                  index=5, key="uf_cat")
+            if st.form_submit_button("保存到我的食物库"):
+                if not (f_name or "").strip():
+                    st.error("请填写食物名")
+                else:
+                    ok, msg = db.add_user_food(
+                        uid, f_name, f_kcal, f_carb, f_protein, f_fat, f_cat
+                    )
+                    flash(msg, "success" if ok else "error")
+                    if ok:
+                        st.rerun()
+
     meal_type = st.selectbox(
         "餐次", ["早餐", "午餐", "晚餐", "加餐"], index=1, key="meal_type_new"
     )
@@ -64,9 +109,17 @@ def render_meal_form() -> None:
         with st.spinner("正在识别…"):
             result = ai_client.recognize_food(pic.getvalue(), pic.type or "image/jpeg")
         if result["ok"]:
-            set_items([(f["name"], f["grams"]) for f in result["foods"]])
+            set_items([
+                (f["name"], f["grams"], f.get("est")) for f in result["foods"]
+            ])
             st.session_state["ai_conf"] = result["overall_confidence"]
             st.session_state["ai_raw"] = result["raw"]
+            st.session_state["ai_est"] = {
+                f["name"]: f["est"] for f in result["foods"] if f.get("est")
+            }
+            st.session_state["ai_low_conf"] = [
+                f["name"] for f in result["foods"] if f["confidence"] < 0.5
+            ]
             if result["overall_confidence"] < 0.5:
                 st.warning("AI 对这张图不太确定，建议逐项核对分量。")
         else:
@@ -75,8 +128,8 @@ def render_meal_form() -> None:
 
     if b2.button("✍️ 手动填写", width="stretch"):
         set_items([])
-        st.session_state["ai_conf"] = None
-        st.session_state["ai_raw"] = None
+        for key in ("ai_conf", "ai_raw", "ai_est", "ai_low_conf"):
+            st.session_state.pop(key, None)
 
     if pic is not None:
         st.image(pic, caption="本次照片", width="stretch")
@@ -107,23 +160,36 @@ def render_meal_form() -> None:
             ]
             st.rerun()
         item["name"], item["grams"] = name, grams
-        current.append({"食物": name, "克数": grams})
+        current.append({"食物": name, "克数": grams, "est": item.get("est")})
 
     if st.button("＋ 再加一种食物", width="stretch"):
         add_item()
         st.rerun()
 
-    details, totals = nutrition.analyze(current)
+    details, totals = nutrition.analyze(
+        current, user_id=uid, ai_est=st.session_state.get("ai_est")
+    )
     if not details:
         st.info("至少填一行有效的食物和克数。")
         return
+    low_conf = set(st.session_state.get("ai_low_conf") or [])
     for d in details:
-        mark = "✅" if d["matched"] else "⚠️ 未匹配"
+        if d["matched"]:
+            mark = f"✅ 匹配「{d['匹配']}」"
+        elif d["estimated"]:
+            mark = "🤖 AI 估算（非标准库，可能有误差）"
+        else:
+            mark = "⚠️ 未匹配（按 0 计算）"
+        if d["食物"] in low_conf:
+            mark += " ⚠️低置信度"
         st.markdown(
             f"- {d['食物']} {d['克数']:.0f}g · **{d['热量']:.0f} 千卡** {mark}"
         )
-    if any(not d["matched"] for d in details):
-        st.warning("有食物没匹配到营养库（按 0 计算），换个更常见的名字试试。")
+    if any(not d["matched"] and not d["estimated"] for d in details):
+        st.warning("有食物既不在营养库、也没有 AI 估算（按 0 计算），换个更常见的名字，"
+                   "或在下方「我的食物库」里录一个自定义食物。")
+    elif any(d["estimated"] for d in details):
+        st.caption("🤖 AI 估算项基于模型常识给出，日常参考够用，精确记录可改成库内食物名。")
 
     m1, m2 = st.columns(2)
     m1.metric("热量", f"{totals['kcal']:.0f} 千卡")
@@ -165,7 +231,7 @@ def render_meal_form() -> None:
             if polished:
                 review = polished
         flash(f"已保存饮食记录：{totals['kcal']:.0f} 千卡。\n\n**点评：**{review}")
-        for key in ("items", "ai_conf", "ai_raw"):
+        for key in ("items", "ai_conf", "ai_raw", "ai_est", "ai_low_conf"):
             st.session_state.pop(key, None)
         st.session_state["uploader_ver"] = (
             st.session_state.get("uploader_ver", 0) + 1
