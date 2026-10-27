@@ -280,3 +280,87 @@ def daily_message(me_name: str, my_kcal: float, my_target: float,
                 f"{partner_name} 还有 {pa_gap:.0f} 千卡空间，节奏很稳。")
     return (f"{partner_name} 今天比目标多了 {abs(pa_gap):.0f} 千卡，可以提醒 TA 明天清淡一点；"
             f"{me_name} 还有 {my_gap:.0f} 千卡空间，继续保持。")
+
+
+# ---------- 运动热量估算（MET 标准，禁止用户手填热量） ----------
+
+# 运动类型 → MET 值（来源：ACSM 代谢当量参考值，1 MET = 3.5 mL O2/kg/min）
+EXERCISE_MET = {
+    "跑步": 8.3, "慢跑": 8.3, "快走": 4.3, "散步": 3.0, "骑行": 6.8,
+    "游泳": 6.0, "力量训练": 6.0, "瑜伽": 3.0, "跳绳": 9.8, "球类运动": 6.0,
+    "椭圆机": 5.0, "健身操": 5.5, "爬山": 6.5, "舞蹈": 5.0, "篮球": 6.5,
+    "羽毛球": 5.5, "乒乓球": 4.0, "足球": 7.0, "其他": 4.0,
+}
+
+# 运动强度 → 热量调节系数
+INTENSITY_FACTOR = {
+    "低强度": 0.70, "中低强度": 0.85, "中强度": 1.00,
+    "中高强度": 1.15, "高强度": 1.30,
+}
+INTENSITY_LEVELS = list(INTENSITY_FACTOR)
+
+
+def met_for(name: str) -> float:
+    """按运动名称匹配 MET（精确 → 包含 → 默认 4.0）。"""
+    name = (name or "").strip()
+    if not name:
+        return 4.0
+    if name in EXERCISE_MET:
+        return EXERCISE_MET[name]
+    for key, met in EXERCISE_MET.items():
+        if key in name or name in key:
+            return met
+    return 4.0
+
+
+def estimate_exercise_kcal(name: str, minutes: float, intensity: str = "中强度",
+                           weight_kg: float = 60.0) -> float:
+    """标准公式：kcal = MET × 3.5 × 体重kg × 时长min / 200，再按强度调系数。
+
+    例：60kg、跑步 5 分钟、中强度 → 8.3×3.5×60×5/200 ≈ 44 千卡，杜绝 5 分钟 880 大卡的失真。"""
+    met = met_for(name)
+    factor = INTENSITY_FACTOR.get(intensity or "中强度", 1.0)
+    kcal = met * 3.5 * max(float(weight_kg or 60), 30.0) * max(float(minutes or 1), 1.0) / 200 * factor
+    return round(kcal, 1)
+
+
+# ---------- 运动热量估算（MET 标准，禁止用户手填热量） ----------
+
+# 运动类型 → MET 值（来源：ACSM 代谢当量参考值，1 MET = 3.5 mL O2/kg/min）
+EXERCISE_MET = {
+    "跑步": 8.3, "慢跑": 8.3, "快走": 4.3, "散步": 3.0, "骑行": 6.8,
+    "游泳": 6.0, "力量训练": 6.0, "瑜伽": 3.0, "跳绳": 9.8, "球类运动": 6.0,
+    "椭圆机": 5.0, "健身操": 5.5, "爬山": 6.5, "舞蹈": 5.0, "篮球": 6.5,
+    "羽毛球": 5.5, "乒乓球": 4.0, "足球": 7.0, "其他": 4.0,
+}
+
+# 运动强度 → 热量调节系数
+INTENSITY_FACTOR = {
+    "低强度": 0.70, "中低强度": 0.85, "中强度": 1.00,
+    "中高强度": 1.15, "高强度": 1.30,
+}
+INTENSITY_LEVELS = list(INTENSITY_FACTOR)
+
+
+def met_for(name: str) -> float:
+    """按运动名称匹配 MET（精确 → 包含 → 默认 4.0）。"""
+    name = (name or "").strip()
+    if not name:
+        return 4.0
+    if name in EXERCISE_MET:
+        return EXERCISE_MET[name]
+    for key, met in EXERCISE_MET.items():
+        if key in name or name in key:
+            return met
+    return 4.0
+
+
+def estimate_exercise_kcal(name: str, minutes: float, intensity: str = "中强度",
+                           weight_kg: float = 60.0) -> float:
+    """标准公式：kcal = MET × 3.5 × 体重kg × 时长min / 200，再按强度调系数。
+
+    例：60kg、跑步 5 分钟、中强度 → 8.3×3.5×60×5/200 ≈ 44 千卡，杜绝 5 分钟 880 大卡的失真。"""
+    met = met_for(name)
+    factor = INTENSITY_FACTOR.get(intensity or "中强度", 1.0)
+    kcal = met * 3.5 * max(float(weight_kg or 60), 30.0) * max(float(minutes or 1), 1.0) / 200 * factor
+    return round(kcal, 1)

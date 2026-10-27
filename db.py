@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS exercises (
     exercise_type TEXT NOT NULL,
     duration_min REAL NOT NULL DEFAULT 0,
     kcal_burned REAL NOT NULL DEFAULT 0,
+    intensity TEXT NOT NULL DEFAULT '中强度',
     note TEXT,
     recorded_at TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -228,6 +229,7 @@ CREATE TABLE IF NOT EXISTS exercises (
     exercise_type TEXT NOT NULL,
     duration_min REAL NOT NULL DEFAULT 0,
     kcal_burned REAL NOT NULL DEFAULT 0,
+    intensity TEXT NOT NULL DEFAULT '中强度',
     note TEXT,
     recorded_at TEXT NOT NULL,
     created_at TEXT NOT NULL
@@ -370,6 +372,15 @@ def init_db() -> None:
                 conn.execute("ALTER TABLE user_foods ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '菜品'")
             else:
                 conn.execute("ALTER TABLE user_foods ADD COLUMN category TEXT NOT NULL DEFAULT '菜品'")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        # 迁移：exercises 补 intensity 列（运动强度，老表无此列，容错忽略）
+        try:
+            if USE_PG:
+                conn.execute("ALTER TABLE exercises ADD COLUMN IF NOT EXISTS intensity TEXT NOT NULL DEFAULT '中强度'")
+            else:
+                conn.execute("ALTER TABLE exercises ADD COLUMN intensity TEXT NOT NULL DEFAULT '中强度'")
             conn.commit()
         except Exception:
             conn.rollback()
@@ -663,15 +674,16 @@ def delete_meal(meal_id: int, user_id: int) -> bool:
 # ---------- 运动记录 ----------
 
 def add_exercise(user_id: int, recorded_at: str, exercise_type: str,
-                 duration_min: float, kcal_burned: float, note: str = "") -> int:
+                 duration_min: float, kcal_burned: float, note: str = "",
+                 intensity: str = "中强度") -> int:
     with closing(get_conn()) as conn:
         rid = _insert(
             conn,
             """INSERT INTO exercises (user_id, exercise_type, duration_min,
-                                      kcal_burned, note, recorded_at, created_at)
-               VALUES (?,?,?,?,?,?,?)""",
+                                      kcal_burned, intensity, note, recorded_at, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (user_id, exercise_type, float(duration_min), float(kcal_burned),
-             note, recorded_at, now()),
+             intensity or "中强度", note, recorded_at, now()),
         )
         conn.commit()
     return rid
@@ -712,14 +724,15 @@ def list_exercises(user_id: int, start: str, end: str) -> list[dict]:
 
 def update_exercise(exercise_id: int, user_id: int, recorded_at: str,
                     exercise_type: str, duration_min: float,
-                    kcal_burned: float, note: str = "") -> bool:
+                    kcal_burned: float, note: str = "",
+                    intensity: str = "中强度") -> bool:
     with closing(get_conn()) as conn:
         cur = conn.execute(
             """UPDATE exercises SET recorded_at = ?, exercise_type = ?,
-                      duration_min = ?, kcal_burned = ?, note = ?
+                      duration_min = ?, kcal_burned = ?, intensity = ?, note = ?
                WHERE id = ? AND user_id = ?""",
             (recorded_at, exercise_type, float(duration_min), float(kcal_burned),
-             note, exercise_id, user_id),
+             intensity or "中强度", note, exercise_id, user_id),
         )
         if cur.rowcount == 0:
             conn.rollback()

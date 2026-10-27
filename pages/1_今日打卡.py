@@ -241,8 +241,23 @@ def render_meal_form() -> None:
 
 # ---------- 运动记录 ----------
 
+def _exercise_weight() -> float:
+    """估算用体重：取最近一次记录，没有则默认 60kg。"""
+    latest = db.latest_weight(uid)
+    return float(latest["weight_kg"]) if latest else 60.0
+
+
+def calc_exercise_kcal(ex_type: str, duration_min: float, intensity: str):
+    """运动消耗热量：AI 综合判断优先，标准 MET 公式兜底，用户不可手填。"""
+    weight = _exercise_weight()
+    ai_kcal = ai_client.estimate_exercise(ex_type, duration_min, intensity, weight)
+    if ai_kcal is not None:
+        return ai_kcal, "AI 综合估算"
+    return nutrition.estimate_exercise_kcal(ex_type, duration_min, intensity, weight), "标准 MET 估算"
+
+
 def render_exercise_form() -> None:
-    st.caption("记录一次运动：填时长和估算消耗热量。")
+    st.caption("记录一次运动：热量由系统按「运动类型 + 时长 + 强度」自动估算，无需手动填写。")
     c1, c2 = st.columns(2)
     ex_type = c1.selectbox("运动类型", db.EXERCISE_TYPES, key="ex_type_new")
     if ex_type == "其他":
@@ -250,15 +265,23 @@ def render_exercise_form() -> None:
     duration_min = c2.number_input(
         "时长（分钟）", 1.0, 1440.0, 30.0, 5.0, key="ex_dur_new"
     )
-    kcal_burned = c2.number_input(
-        "估算消耗（千卡）", 1.0, 5000.0, 200.0, 10.0, key="ex_kcal_new"
+    intensity = c2.selectbox(
+        "运动强度", nutrition.INTENSITY_LEVELS, index=2, key="ex_intensity_new"
     )
     day = st.date_input("日期", value=db.today(), max_value=db.today(), key="ex_day_new")
     clock = st.time_input("时间", value=now_clock(), key="ex_clock_new")
     note = st.text_input("备注（可选）", key="ex_note_new",
                          placeholder="比如：夜跑 5 公里")
 
-    if st.button("✅ 保存运动记录", type="primary", width="stretch"):
+    b1, b2 = st.columns(2)
+    if b1.button("🔢 预览消耗热量", width="stretch"):
+        if not (ex_type or "").strip():
+            st.error("请先填写运动类型")
+        else:
+            kcal, method = calc_exercise_kcal(ex_type.strip(), duration_min, intensity)
+            st.success(f"预计消耗约 **{kcal:.0f} 千卡**（{method}）")
+
+    if b2.button("✅ 保存运动记录", type="primary", width="stretch"):
         moment, err = build_datetime(day, clock)
         if err:
             st.error(err)
@@ -266,14 +289,15 @@ def render_exercise_form() -> None:
         if not (ex_type or "").strip():
             st.error("请填写运动类型")
             return
+        kcal, method = calc_exercise_kcal(ex_type.strip(), duration_min, intensity)
         try:
-            db.add_exercise(uid, moment, ex_type.strip(), duration_min, kcal_burned, note)
+            db.add_exercise(uid, moment, ex_type.strip(), duration_min, kcal, note, intensity)
         except Exception as exc:
             flash(f"保存失败：{exc}", "error")
             st.rerun()
         flash(
             f"已保存运动记录：{ex_type.strip()} · {duration_min:.0f} 分钟 · "
-            f"约 {kcal_burned:.0f} 千卡。"
+            f"约 {kcal:.0f} 千卡（{method}）。"
         )
         st.rerun()
 

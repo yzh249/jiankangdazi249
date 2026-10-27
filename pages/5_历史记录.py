@@ -7,6 +7,7 @@ import streamlit as st
 
 import db
 import nutrition
+import ai_client
 from common import (
     setup, require_login, sidebar, flash, show_flash,
     pick_range, build_datetime, now_clock,
@@ -229,9 +230,15 @@ def edit_exercise_dialog(exercise_id: int):
             "时长（分钟）", 1.0, 1440.0, float(ex["duration_min"]), 5.0,
             key=f"edit_ex_dur_{exercise_id}",
         )
-        kcal_burned = c2.number_input(
-            "估算消耗（千卡）", 1.0, 5000.0, float(ex["kcal_burned"]), 10.0,
-            key=f"edit_ex_kcal_{exercise_id}",
+        intensity = c2.selectbox(
+            "运动强度", nutrition.INTENSITY_LEVELS,
+            key=f"edit_ex_intensity_{exercise_id}",
+            index=nutrition.INTENSITY_LEVELS.index(ex["intensity"])
+            if ex.get("intensity") in nutrition.INTENSITY_LEVELS else 2,
+        )
+        st.caption(
+            f"消耗热量由系统按「运动类型 + 时长 + 强度」自动估算"
+            f"（当前记录为 {ex['kcal_burned']:.0f} 千卡，保存后按新参数重算）。"
         )
         day = st.date_input(
             "日期", value=dt.date.fromisoformat(ex["recorded_at"][:10]),
@@ -255,10 +262,18 @@ def edit_exercise_dialog(exercise_id: int):
         if not (ex_type or "").strip():
             st.error("请填写运动类型")
             return
+        latest = db.latest_weight(uid)
+        weight = float(latest["weight_kg"]) if latest else 60.0
+        ai_kcal = ai_client.estimate_exercise(ex_type.strip(), duration_min, intensity, weight)
+        if ai_kcal is not None:
+            kcal_burned = ai_kcal
+        else:
+            kcal_burned = nutrition.estimate_exercise_kcal(
+                ex_type.strip(), duration_min, intensity, weight)
         try:
             ok = db.update_exercise(
                 exercise_id, uid, moment, ex_type.strip(),
-                duration_min, kcal_burned, note,
+                duration_min, kcal_burned, note, intensity,
             )
         except Exception as exc:
             st.error(f"保存失败：{exc}")

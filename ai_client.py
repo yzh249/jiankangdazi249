@@ -189,3 +189,41 @@ def comment_meal(totals: dict, foods: list[str]) -> str | None:
         ]).strip()
     except Exception:
         return None
+
+
+EXERCISE_PROMPT = """你是运动热量估算助手。根据运动类型、时长、强度、体重，估算一次运动消耗的热量（千卡）。
+要求：
+1. 只输出 JSON：{"kcal": 数字}
+2. 参照常见运动 MET 代谢当量，60kg 体重跑步 10 分钟中等强度约 87 千卡，跳绳约 103 千卡，快走约 45 千卡
+3. 强度修正：低约 0.7 倍，中低约 0.85 倍，中约 1 倍，中高约 1.15 倍，高约 1.3 倍
+4. 数值必须合理，禁止输出明显夸张的结果
+"""
+
+
+def estimate_exercise(name: str, minutes: float, intensity: str,
+                      weight_kg: float) -> float | None:
+    """AI 综合判断一次运动消耗热量（千卡）。没 Key/调用失败/超范围返回 None，由调用方回退 MET 公式。
+
+    合理性约束：结果与 MET 公式对比，超出 [MET×0.5, MET×2] 一律拉回边界。"""
+    from nutrition import estimate_exercise_kcal
+    if not api_key():
+        return None
+    base = estimate_exercise_kcal(name, minutes, intensity, weight_kg)
+    user = (
+        f"运动类型：{name}，时长：{minutes} 分钟，"
+        f"强度：{intensity}，体重：{weight_kg} kg。"
+        f"请估算这次运动消耗多少千卡，只输出 JSON。"
+    )
+    try:
+        content = _chat(TEXT_MODEL, [
+            {"role": "system", "content": EXERCISE_PROMPT},
+            {"role": "user", "content": user},
+        ])
+        data = _parse_json(content)
+        kcal = float(data.get("kcal") or 0) if data else 0.0
+        if kcal <= 0:
+            return None
+        lo, hi = base * 0.5, base * 2.0
+        return round(max(lo, min(hi, kcal)), 1)
+    except Exception:
+        return None
