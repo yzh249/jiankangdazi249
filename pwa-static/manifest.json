@@ -1,0 +1,38 @@
+{
+  "name": "健康搭子",
+  "short_name": "健康搭子",
+  "description": "双人饮食热量监督 · 拍照识别 · 互相可见",
+  "start_url": "https://jiankangdazi249-rpq9qkqnkeawtgdktecuze.streamlit.app/",
+  "scope": "https://jiankangdazi249-rpq9qkqnkeawtgdktecuze.streamlit.app/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e1117",
+  "theme_color": "#4caf50",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

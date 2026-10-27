@@ -2,7 +2,6 @@
 import streamlit as st
 
 import db
-from sw_route import install_pwa, register_sw_and_meta
 
 MOBILE_CSS = """
 <style>
@@ -25,9 +24,18 @@ MOBILE_CSS = """
 def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
-    install_pwa()
-    register_sw_and_meta()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
+    # PWA manifest & icons 托管在 Vercel（独立静态站）
+    PWA_BASE = "https://jiankangdazi-pwa.vercel.app"
+    st.markdown(
+        f'<link rel="manifest" href="{PWA_BASE}/manifest.json" />'
+        '<meta name="theme-color" content="#4caf50" />'
+        '<meta name="apple-mobile-web-app-capable" content="yes" />'
+        '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />'
+        '<meta name="apple-mobile-web-app-title" content="健康搭子" />'
+        f'<link rel="apple-touch-icon" href="{PWA_BASE}/icon-192.png" />',
+        unsafe_allow_html=True,
+    )
 
 def require_login() -> int:
     if not st.session_state.get("user_id"):
