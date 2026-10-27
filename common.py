@@ -2,7 +2,7 @@
 import streamlit as st
 
 import db
-from sw_route import install_pwa, pwa_status, register_sw_component
+from sw_route import install_pwa, register_sw_and_meta
 
 MOBILE_CSS = """
 <style>
@@ -26,10 +26,8 @@ def setup(title: str, icon: str = "🥗") -> None:
     st.set_page_config(page_title=f"{title} · 健康搭子", page_icon=icon, layout="wide")
     db.init_db()
     install_pwa()
-    register_sw_component()
-    st.caption(f"{st.__version__} · {pwa_status()}")
+    register_sw_and_meta()
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
-
 
 def require_login() -> int:
     if not st.session_state.get("user_id"):
