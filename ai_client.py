@@ -88,8 +88,11 @@ def _chat(model: str, messages: list[dict]) -> str:
     return _content_text(data["choices"][0]["message"]["content"])
 
 
-def recognize_food(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
-    """返回 {ok, foods, overall_confidence, raw, error}，任何失败都不抛异常。"""
+def recognize_food(image_bytes: bytes, mime: str = "image/jpeg",
+                   hint: str = "") -> dict:
+    """返回 {ok, foods, overall_confidence, raw, error}，任何失败都不抛异常。
+
+    hint：用户的文字备注辅助（描述图中的食物种类/分量），参与识别、显著提升准确率；为空时行为不变。"""
     if not api_key():
         return {
             "ok": False,
@@ -100,11 +103,20 @@ def recognize_food(image_bytes: bytes, mime: str = "image/jpeg") -> dict:
         }
     try:
         b64 = base64.b64encode(image_bytes).decode()
+        user_text = RECOGNIZE_PROMPT
+        hint = (hint or "").strip()
+        if hint:
+            user_text = (
+                f"{RECOGNIZE_PROMPT}\n"
+                f"【用户文字备注（可靠信息，务必结合识别）】{hint}\n"
+                "要求：以上文字是用户对图中食物的描述，识别结果必须与它一致；"
+                "若图中食物与描述对不上，以文字描述为准。"
+            )
         content = _chat(VISION_MODEL, [{
             "role": "user",
             "content": [
                 {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-                {"type": "text", "text": RECOGNIZE_PROMPT},
+                {"type": "text", "text": user_text},
             ],
         }])
     except Exception as exc:  # 网络、额度、鉴权等一律降级

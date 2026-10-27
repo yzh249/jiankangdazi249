@@ -91,8 +91,8 @@ def render_meal_form() -> None:
     )
     day = st.date_input("日期", value=db.today(), max_value=db.today(), key="meal_day_new")
     clock = st.time_input("时间", value=now_clock(), key="meal_clock_new")
-    note = st.text_input("备注（可选）", key="meal_note_new",
-                         placeholder="比如：食堂二楼 / 和朋友聚餐")
+    note = st.text_input("文字备注辅助（选填）", key="meal_note_new",
+                         placeholder="例：一碗米饭 + 红烧肉 + 炒青菜，约1人份。写清楚能帮 AI 更准识别，也会存进记录备注")
 
     if not ai_client.configured():
         st.caption("ℹ️ 没配置 AI Key，可以直接手动填写；配置后支持拍照识别。")
@@ -107,7 +107,9 @@ def render_meal_form() -> None:
     b1, b2 = st.columns(2)
     if b1.button("🔍 AI 识别", disabled=pic is None, width="stretch"):
         with st.spinner("正在识别…"):
-            result = ai_client.recognize_food(pic.getvalue(), pic.type or "image/jpeg")
+            result = ai_client.recognize_food(
+                pic.getvalue(), pic.type or "image/jpeg", hint=note
+            )
         if result["ok"]:
             set_items([
                 (f["name"], f["grams"], f.get("est")) for f in result["foods"]
