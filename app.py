@@ -60,7 +60,7 @@ def render_home(uid: int) -> None:
 
     st.divider()
     st.subheader("快速入口")
-    l1, l2, l3, l4 = st.columns(4)
+    l1, l2, l3, l4, l5 = st.columns(5)
     with l1:
         st.page_link("pages/1_今日打卡.py", label="拍照打卡", icon="📸")
     with l2:
@@ -69,6 +69,8 @@ def render_home(uid: int) -> None:
         st.page_link("pages/3_搭档.py", label="搭档管理", icon="🤝")
     with l4:
         st.page_link("pages/4_我的目标.py", label="设置目标", icon="🎯")
+    with l5:
+        st.page_link("pages/5_历史记录.py", label="历史记录", icon="🗂️")
 
 
 if st.session_state.get("user_id"):

@@ -119,6 +119,28 @@ CREATE TABLE IF NOT EXISTS images (
     data BLOB NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS exercises (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    exercise_type TEXT NOT NULL,
+    duration_min REAL NOT NULL DEFAULT 0,
+    kcal_burned REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    recorded_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS exercises_user_time_idx ON exercises (user_id, recorded_at);
+
+CREATE TABLE IF NOT EXISTS weights (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    record_date TEXT NOT NULL,
+    weight_kg REAL NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, record_date)
+);
 """
 
 SCHEMA_PG = """
@@ -186,9 +208,40 @@ CREATE TABLE IF NOT EXISTS images (
     data BYTEA NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS exercises (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    exercise_type TEXT NOT NULL,
+    duration_min REAL NOT NULL DEFAULT 0,
+    kcal_burned REAL NOT NULL DEFAULT 0,
+    note TEXT,
+    recorded_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS exercises_user_time_idx ON exercises (user_id, recorded_at);
+
+CREATE TABLE IF NOT EXISTS weights (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    record_date TEXT NOT NULL,
+    weight_kg REAL NOT NULL,
+    note TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (user_id, record_date)
+);
 """
 
 _inited = False
+
+# 每日记录类型（新建记录时由用户自选）
+RECORD_TYPES = ("饮食记录", "运动记录", "体重记录")
+
+# 常用运动类型（运动记录表单用）
+EXERCISE_TYPES = (
+    "跑步", "快走", "骑行", "游泳", "力量训练",
+    "球类运动", "跳绳", "瑜伽", "其他",
+)
 
 
 def now() -> str:
@@ -235,6 +288,9 @@ class _PGConnection:
     def commit(self):
         self._raw.commit()
 
+    def rollback(self):
+        self._raw.rollback()
+
     def close(self):
         self._raw.close()
 
@@ -246,6 +302,9 @@ def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL + synchronous=NORMAL：崩溃后数据不易损坏，读写并发更稳（持久化加固）
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -266,12 +325,15 @@ def init_db() -> None:
                 DROP TABLE IF EXISTS meal_items;
                 DROP TABLE IF EXISTS meals;
                 DROP TABLE IF EXISTS images;
+                DROP TABLE IF EXISTS exercises;
+                DROP TABLE IF EXISTS weights;
                 DROP TABLE IF EXISTS pairs;
                 DROP TABLE IF EXISTS profiles;
                 DROP TABLE IF EXISTS users;
                 """
                 if not USE_PG else
-                "DROP TABLE IF EXISTS meal_items, meals, images, pairs, profiles, users CASCADE"
+                "DROP TABLE IF EXISTS meal_items, meals, images, exercises, weights, "
+                "pairs, profiles, users CASCADE"
             )
             conn.commit()
         conn.executescript(SCHEMA_PG if USE_PG else SCHEMA_SQLITE)
@@ -415,35 +477,59 @@ def dissolve_pair(user_id: int) -> bool:
     return True
 
 
-# ---------- 打卡记录 ----------
+# ---------- 饮食记录 ----------
+
+def _item_totals(items: list[dict]) -> dict:
+    return {
+        "kcal": round(sum(float(i["kcal"]) for i in items), 1),
+        "carb": round(sum(float(i["carb"]) for i in items), 1),
+        "protein": round(sum(float(i["protein"]) for i in items), 1),
+        "fat": round(sum(float(i["fat"]) for i in items), 1),
+    }
+
+
+def _insert_items(conn, meal_id: int, items: list[dict]) -> None:
+    conn.executemany(
+        """INSERT INTO meal_items (meal_id, food_name, grams, kcal, carb, protein, fat, source)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        [
+            (meal_id, i["food_name"], i["grams"], i["kcal"], i["carb"],
+             i["protein"], i["fat"], i.get("source", "manual"))
+            for i in items
+        ],
+    )
+
 
 def add_meal(user_id: int, eaten_at: str, meal_type: str, image_path: str | None,
              note: str, items: list[dict], ai_confidence: float | None = None,
              ai_raw: str | None = None) -> int:
-    kcal = sum(float(i["kcal"]) for i in items)
-    carb = sum(float(i["carb"]) for i in items)
-    protein = sum(float(i["protein"]) for i in items)
-    fat = sum(float(i["fat"]) for i in items)
+    if not items:
+        raise ValueError("至少需要一条食物明细")
+    totals = _item_totals(items)
     with closing(get_conn()) as conn:
         meal_id = _insert(
             conn,
             """INSERT INTO meals (user_id, eaten_at, meal_type, image_path, note,
                                   kcal, carb, protein, fat, ai_confidence, ai_raw, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (user_id, eaten_at, meal_type, image_path, note, kcal, carb, protein, fat,
+            (user_id, eaten_at, meal_type, image_path, note,
+             totals["kcal"], totals["carb"], totals["protein"], totals["fat"],
              ai_confidence, ai_raw, now()),
         )
-        conn.executemany(
-            """INSERT INTO meal_items (meal_id, food_name, grams, kcal, carb, protein, fat, source)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            [
-                (meal_id, i["food_name"], i["grams"], i["kcal"], i["carb"],
-                 i["protein"], i["fat"], i.get("source", "manual"))
-                for i in items
-            ],
-        )
+        _insert_items(conn, meal_id, items)
         conn.commit()
     return meal_id
+
+
+def get_meal(meal_id: int, user_id: int | None = None):
+    sql = "SELECT * FROM meals WHERE id = ?"
+    params: list = [meal_id]
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    with closing(get_conn()) as conn:
+        row = conn.execute(sql, tuple(params)).fetchone()
+    return dict(row) if row else None
 
 
 def get_meals(user_id: int, day: str) -> list[dict]:
@@ -456,12 +542,48 @@ def get_meals(user_id: int, day: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def list_meals(user_id: int, start: str, end: str) -> list[dict]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT * FROM meals
+               WHERE user_id = ? AND substr(eaten_at, 1, 10) BETWEEN ? AND ?
+               ORDER BY eaten_at DESC""",
+            (user_id, start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_meal_items(meal_id: int) -> list[dict]:
     with closing(get_conn()) as conn:
         rows = conn.execute(
             "SELECT * FROM meal_items WHERE meal_id = ? ORDER BY id", (meal_id,)
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def update_meal(meal_id: int, user_id: int, eaten_at: str, meal_type: str,
+                note: str, items: list[dict]) -> bool:
+    """改自己的饮食记录；对方记录写不进去（WHERE 带 user_id）。"""
+    if not items:
+        return False
+    totals = _item_totals(items)
+    with closing(get_conn()) as conn:
+        row = conn.execute(
+            "SELECT id FROM meals WHERE id = ? AND user_id = ?", (meal_id, user_id)
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute(
+            """UPDATE meals SET eaten_at = ?, meal_type = ?, note = ?,
+                      kcal = ?, carb = ?, protein = ?, fat = ?
+               WHERE id = ? AND user_id = ?""",
+            (eaten_at, meal_type, note, totals["kcal"], totals["carb"],
+             totals["protein"], totals["fat"], meal_id, user_id),
+        )
+        conn.execute("DELETE FROM meal_items WHERE meal_id = ?", (meal_id,))
+        _insert_items(conn, meal_id, items)
+        conn.commit()
+    return True
 
 
 def day_total(user_id: int, day: str) -> dict:
@@ -493,14 +615,213 @@ def delete_meal(meal_id: int, user_id: int) -> bool:
         row = conn.execute(
             "SELECT user_id, image_path FROM meals WHERE id = ?", (meal_id,)
         ).fetchone()
-        if not row or row["user_id"] != user_id:
+        if not row or int(row["user_id"]) != int(user_id):
             return False
         img = row["image_path"]
         if img and img.startswith("dbimg:"):
             conn.execute("DELETE FROM images WHERE id = ?", (int(img[6:]),))
-        conn.execute("DELETE FROM meals WHERE id = ?", (meal_id,))
+        conn.execute("DELETE FROM meals WHERE id = ? AND user_id = ?", (meal_id, user_id))
         conn.commit()
     return True
+
+
+# ---------- 运动记录 ----------
+
+def add_exercise(user_id: int, recorded_at: str, exercise_type: str,
+                 duration_min: float, kcal_burned: float, note: str = "") -> int:
+    with closing(get_conn()) as conn:
+        rid = _insert(
+            conn,
+            """INSERT INTO exercises (user_id, exercise_type, duration_min,
+                                      kcal_burned, note, recorded_at, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (user_id, exercise_type, float(duration_min), float(kcal_burned),
+             note, recorded_at, now()),
+        )
+        conn.commit()
+    return rid
+
+
+def get_exercise(exercise_id: int, user_id: int | None = None):
+    sql = "SELECT * FROM exercises WHERE id = ?"
+    params: list = [exercise_id]
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    with closing(get_conn()) as conn:
+        row = conn.execute(sql, tuple(params)).fetchone()
+    return dict(row) if row else None
+
+
+def get_exercises(user_id: int, day: str) -> list[dict]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT * FROM exercises
+               WHERE user_id = ? AND substr(recorded_at, 1, 10) = ?
+               ORDER BY recorded_at ASC""",
+            (user_id, day),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_exercises(user_id: int, start: str, end: str) -> list[dict]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT * FROM exercises
+               WHERE user_id = ? AND substr(recorded_at, 1, 10) BETWEEN ? AND ?
+               ORDER BY recorded_at DESC""",
+            (user_id, start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_exercise(exercise_id: int, user_id: int, recorded_at: str,
+                    exercise_type: str, duration_min: float,
+                    kcal_burned: float, note: str = "") -> bool:
+    with closing(get_conn()) as conn:
+        cur = conn.execute(
+            """UPDATE exercises SET recorded_at = ?, exercise_type = ?,
+                      duration_min = ?, kcal_burned = ?, note = ?
+               WHERE id = ? AND user_id = ?""",
+            (recorded_at, exercise_type, float(duration_min), float(kcal_burned),
+             note, exercise_id, user_id),
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return False
+        conn.commit()
+    return True
+
+
+def delete_exercise(exercise_id: int, user_id: int) -> bool:
+    with closing(get_conn()) as conn:
+        cur = conn.execute(
+            "DELETE FROM exercises WHERE id = ? AND user_id = ?",
+            (exercise_id, user_id),
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return False
+        conn.commit()
+    return True
+
+
+def day_exercise_total(user_id: int, day: str) -> dict:
+    with closing(get_conn()) as conn:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(kcal_burned),0) kcal,
+                      COALESCE(SUM(duration_min),0) minutes,
+                      COUNT(*) records
+               FROM exercises WHERE user_id = ? AND substr(recorded_at, 1, 10) = ?""",
+            (user_id, day),
+        ).fetchone()
+    return dict(row)
+
+
+# ---------- 体重记录（每人每天一条，重复保存即覆盖） ----------
+
+def save_weight(user_id: int, record_date: str, weight_kg: float,
+                note: str = "") -> int:
+    with closing(get_conn()) as conn:
+        conn.execute(
+            """INSERT INTO weights (user_id, record_date, weight_kg, note, created_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(user_id, record_date) DO UPDATE SET
+                 weight_kg = excluded.weight_kg,
+                 note = excluded.note,
+                 created_at = excluded.created_at""",
+            (user_id, record_date, float(weight_kg), note, now()),
+        )
+        row = conn.execute(
+            "SELECT id FROM weights WHERE user_id = ? AND record_date = ?",
+            (user_id, record_date),
+        ).fetchone()
+        conn.commit()
+    return int(row["id"]) if row else 0
+
+
+def get_weight(weight_id: int, user_id: int | None = None):
+    sql = "SELECT * FROM weights WHERE id = ?"
+    params: list = [weight_id]
+    if user_id is not None:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    with closing(get_conn()) as conn:
+        row = conn.execute(sql, tuple(params)).fetchone()
+    return dict(row) if row else None
+
+
+def get_weight_for_date(user_id: int, day: str):
+    with closing(get_conn()) as conn:
+        row = conn.execute(
+            "SELECT * FROM weights WHERE user_id = ? AND record_date = ?",
+            (user_id, day),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def latest_weight(user_id: int):
+    with closing(get_conn()) as conn:
+        row = conn.execute(
+            "SELECT * FROM weights WHERE user_id = ? ORDER BY record_date DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_weights(user_id: int, start: str, end: str) -> list[dict]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT * FROM weights
+               WHERE user_id = ? AND record_date BETWEEN ? AND ?
+               ORDER BY record_date DESC""",
+            (user_id, start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def daily_weights(user_id: int, start: str, end: str) -> list[dict]:
+    with closing(get_conn()) as conn:
+        rows = conn.execute(
+            """SELECT record_date AS d, weight_kg AS kg
+               FROM weights WHERE user_id = ? AND record_date BETWEEN ? AND ?
+               ORDER BY record_date""",
+            (user_id, start, end),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_weight(weight_id: int, user_id: int, record_date: str,
+                  weight_kg: float, note: str = "") -> bool:
+    """改自己的体重记录；日期撞上当天已有记录时返回 False。"""
+    with closing(get_conn()) as conn:
+        try:
+            cur = conn.execute(
+                """UPDATE weights SET record_date = ?, weight_kg = ?, note = ?
+                   WHERE id = ? AND user_id = ?""",
+                (record_date, float(weight_kg), note, weight_id, user_id),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                return False
+            conn.commit()
+        except _IntegrityError:
+            conn.rollback()
+            return False
+    return True
+
+
+def delete_weight(weight_id: int, user_id: int) -> bool:
+    with closing(get_conn()) as conn:
+        cur = conn.execute(
+            "DELETE FROM weights WHERE id = ? AND user_id = ?", (weight_id, user_id)
+        )
+        if cur.rowcount == 0:
+            conn.rollback()
+            return False
+        conn.commit()
+    return True
+
 
 
 # ---------- 图片 ----------

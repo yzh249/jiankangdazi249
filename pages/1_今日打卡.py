@@ -3,18 +3,21 @@ import streamlit as st
 import ai_client
 import db
 import nutrition
-from common import setup, require_login, sidebar
+from common import (
+    setup, require_login, sidebar, flash, show_flash,
+    build_datetime, now_clock,
+)
 
 setup("今日打卡", "📸")
 uid = require_login()
 sidebar()
-
-if "last_review" in st.session_state:
-    st.success(st.session_state.pop("last_review"))
+show_flash()
 
 target = db.get_target(uid)
 st.title("今日打卡")
 
+
+# ---------- 饮食记录：食物明细行编辑 ----------
 
 def set_items(pairs) -> None:
     """pairs: [(食物名, 克数)]，为空时给一行空白。"""
@@ -37,12 +40,14 @@ def add_item() -> None:
     st.session_state["items"].append({"id": seq, "name": "", "grams": 100.0})
 
 
-tab_new, tab_today = st.tabs(["📸 新打卡", "📋 今日记录"])
-
-with tab_new:
-    meal_type = st.selectbox("餐次", ["早餐", "午餐", "晚餐", "加餐"], index=1)
-    day = st.date_input("日期", value=db.today())
-    note = st.text_input("备注（可选）", placeholder="比如：食堂二楼 / 和朋友聚餐")
+def render_meal_form() -> None:
+    meal_type = st.selectbox(
+        "餐次", ["早餐", "午餐", "晚餐", "加餐"], index=1, key="meal_type_new"
+    )
+    day = st.date_input("日期", value=db.today(), max_value=db.today(), key="meal_day_new")
+    clock = st.time_input("时间", value=now_clock(), key="meal_clock_new")
+    note = st.text_input("备注（可选）", key="meal_note_new",
+                         placeholder="比如：食堂二楼 / 和朋友聚餐")
 
     if not ai_client.configured():
         st.caption("ℹ️ 没配置 AI Key，可以直接手动填写；配置后支持拍照识别。")
@@ -79,88 +84,181 @@ with tab_new:
     items = st.session_state.get("items")
     if items is None:
         st.info("上传照片后点「AI 识别」，或直接点「手动填写」。")
-    else:
-        st.caption("AI 可能有误差：直接改名字或克数，热量会实时重算。")
-        gen = st.session_state.get("items_gen", 0)
-        current = []
-        for item in list(items):
-            c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="center")
-            name = c1.text_input(
-                f"食物{item['id']}", value=item["name"],
-                key=f"food_{gen}_{item['id']}", placeholder="食物名",
-                label_visibility="collapsed",
-            )
-            grams = c2.number_input(
-                f"克数{item['id']}", value=float(item["grams"] or 0),
-                min_value=0.0, max_value=3000.0, step=10.0,
-                key=f"grams_{gen}_{item['id']}", label_visibility="collapsed",
-            )
-            if c3.button("✕", key=f"del_item_{gen}_{item['id']}", help="删除这一行"):
-                st.session_state["items"] = [
-                    i for i in items if i["id"] != item["id"]
-                ]
-                st.rerun()
-            item["name"], item["grams"] = name, grams
-            current.append({"食物": name, "克数": grams})
+        return
 
-        if st.button("＋ 再加一种食物", width="stretch"):
-            add_item()
+    st.caption("AI 可能有误差：直接改名字或克数，热量会实时重算。")
+    gen = st.session_state.get("items_gen", 0)
+    current = []
+    for item in list(items):
+        c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="center")
+        name = c1.text_input(
+            f"食物{item['id']}", value=item["name"],
+            key=f"food_{gen}_{item['id']}", placeholder="食物名",
+            label_visibility="collapsed",
+        )
+        grams = c2.number_input(
+            f"克数{item['id']}", value=float(item["grams"] or 0),
+            min_value=0.0, max_value=3000.0, step=10.0,
+            key=f"grams_{gen}_{item['id']}", label_visibility="collapsed",
+        )
+        if c3.button("✕", key=f"del_item_{gen}_{item['id']}", help="删除这一行"):
+            st.session_state["items"] = [
+                i for i in items if i["id"] != item["id"]
+            ]
+            st.rerun()
+        item["name"], item["grams"] = name, grams
+        current.append({"食物": name, "克数": grams})
+
+    if st.button("＋ 再加一种食物", width="stretch"):
+        add_item()
+        st.rerun()
+
+    details, totals = nutrition.analyze(current)
+    if not details:
+        st.info("至少填一行有效的食物和克数。")
+        return
+    for d in details:
+        mark = "✅" if d["matched"] else "⚠️ 未匹配"
+        st.markdown(
+            f"- {d['食物']} {d['克数']:.0f}g · **{d['热量']:.0f} 千卡** {mark}"
+        )
+    if any(not d["matched"] for d in details):
+        st.warning("有食物没匹配到营养库（按 0 计算），换个更常见的名字试试。")
+
+    m1, m2 = st.columns(2)
+    m1.metric("热量", f"{totals['kcal']:.0f} 千卡")
+    m2.metric("蛋白质", f"{totals['protein']:.0f} g")
+    st.caption(
+        f"碳水 {totals['carb']:.0f}g · 脂肪 {totals['fat']:.0f}g · "
+        f"蔬菜 {totals['veg_grams']:.0f}g"
+    )
+
+    if st.button("✅ 保存这条打卡", type="primary", width="stretch"):
+        moment, err = build_datetime(day, clock)
+        if err:
+            st.error(err)
+            return
+        img_path = None
+        try:
+            if pic is not None:
+                img_path = db.save_image(pic.getvalue(), pic.type or "image/jpeg", uid)
+            items_to_save = [{
+                "food_name": d["食物"],
+                "grams": d["克数"],
+                "kcal": d["热量"],
+                "carb": d["碳水"],
+                "protein": d["蛋白"],
+                "fat": d["脂肪"],
+                "source": "ai" if st.session_state.get("ai_conf") is not None else "manual",
+            } for d in details]
+            db.add_meal(uid, moment, meal_type, img_path, note, items_to_save,
+                        st.session_state.get("ai_conf"), st.session_state.get("ai_raw"))
+        except Exception as exc:
+            flash(f"保存失败：{exc}", "error")
             st.rerun()
 
-        details, totals = nutrition.analyze(current)
-        if not details:
-            st.info("至少填一行有效的食物和克数。")
-        else:
-            for d in details:
-                mark = "✅" if d["matched"] else "⚠️ 未匹配"
-                st.markdown(
-                    f"- {d['食物']} {d['克数']:.0f}g · **{d['热量']:.0f} 千卡** {mark}"
-                )
-            if any(not d["matched"] for d in details):
-                st.warning("有食物没匹配到营养库（按 0 计算），换个更常见的名字试试。")
-
-            m1, m2 = st.columns(2)
-            m1.metric("热量", f"{totals['kcal']:.0f} 千卡")
-            m2.metric("蛋白质", f"{totals['protein']:.0f} g")
-            st.caption(
-                f"碳水 {totals['carb']:.0f}g · 脂肪 {totals['fat']:.0f}g · "
-                f"蔬菜 {totals['veg_grams']:.0f}g"
+        review = " ".join(nutrition.rule_review(totals))
+        if ai_client.configured():
+            polished = ai_client.comment_meal(
+                totals, [d["食物"] for d in details]
             )
+            if polished:
+                review = polished
+        flash(f"已保存饮食记录：{totals['kcal']:.0f} 千卡。\n\n**点评：**{review}")
+        for key in ("items", "ai_conf", "ai_raw"):
+            st.session_state.pop(key, None)
+        st.session_state["uploader_ver"] = (
+            st.session_state.get("uploader_ver", 0) + 1
+        )
+        st.rerun()
 
-            if st.button("✅ 保存这条打卡", type="primary", width="stretch"):
-                img_path = (
-                    db.save_image(pic.getvalue(), pic.type or "image/jpeg", uid)
-                    if pic else None
-                )
-                items_to_save = [{
-                    "food_name": d["食物"],
-                    "grams": d["克数"],
-                    "kcal": d["热量"],
-                    "carb": d["碳水"],
-                    "protein": d["蛋白"],
-                    "fat": d["脂肪"],
-                    "source": "ai" if st.session_state.get("ai_conf") is not None else "manual",
-                } for d in details]
-                eaten_at = f"{day.isoformat()} {db.now()[11:16]}:00"
-                db.add_meal(uid, eaten_at, meal_type, img_path, note, items_to_save,
-                            st.session_state.get("ai_conf"), st.session_state.get("ai_raw"))
 
-                review = " ".join(nutrition.rule_review(totals))
-                if ai_client.configured():
-                    polished = ai_client.comment_meal(
-                        totals, [d["食物"] for d in details]
-                    )
-                    if polished:
-                        review = polished
-                st.session_state["last_review"] = (
-                    f"已保存：{totals['kcal']:.0f} 千卡。\n\n**点评：**{review}"
-                )
-                for key in ("items", "ai_conf", "ai_raw"):
-                    st.session_state.pop(key, None)
-                st.session_state["uploader_ver"] = (
-                    st.session_state.get("uploader_ver", 0) + 1
-                )
-                st.rerun()
+# ---------- 运动记录 ----------
+
+def render_exercise_form() -> None:
+    st.caption("记录一次运动：填时长和估算消耗热量。")
+    c1, c2 = st.columns(2)
+    ex_type = c1.selectbox("运动类型", db.EXERCISE_TYPES, key="ex_type_new")
+    if ex_type == "其他":
+        ex_type = c1.text_input("具体运动", key="ex_custom_new", placeholder="例如：爬山")
+    duration_min = c2.number_input(
+        "时长（分钟）", 1.0, 1440.0, 30.0, 5.0, key="ex_dur_new"
+    )
+    kcal_burned = c2.number_input(
+        "估算消耗（千卡）", 1.0, 5000.0, 200.0, 10.0, key="ex_kcal_new"
+    )
+    day = st.date_input("日期", value=db.today(), max_value=db.today(), key="ex_day_new")
+    clock = st.time_input("时间", value=now_clock(), key="ex_clock_new")
+    note = st.text_input("备注（可选）", key="ex_note_new",
+                         placeholder="比如：夜跑 5 公里")
+
+    if st.button("✅ 保存运动记录", type="primary", width="stretch"):
+        moment, err = build_datetime(day, clock)
+        if err:
+            st.error(err)
+            return
+        if not (ex_type or "").strip():
+            st.error("请填写运动类型")
+            return
+        try:
+            db.add_exercise(uid, moment, ex_type.strip(), duration_min, kcal_burned, note)
+        except Exception as exc:
+            flash(f"保存失败：{exc}", "error")
+            st.rerun()
+        flash(
+            f"已保存运动记录：{ex_type.strip()} · {duration_min:.0f} 分钟 · "
+            f"约 {kcal_burned:.0f} 千卡。"
+        )
+        st.rerun()
+
+
+# ---------- 体重记录 ----------
+
+def render_weight_form() -> None:
+    st.caption("记录当天体重。同一天重复保存会覆盖当天记录。")
+    profile = db.get_profile(uid)
+    default_w = float((profile or {}).get("weight") or 60.0)
+    latest = db.latest_weight(uid)
+    if latest:
+        default_w = float(latest["weight_kg"])
+    weight_kg = st.number_input(
+        "体重（kg）", 20.0, 400.0, default_w, 0.1, key="wt_kg_new"
+    )
+    day = st.date_input("日期", value=db.today(), max_value=db.today(), key="wt_day_new")
+    note = st.text_input("备注（可选）", key="wt_note_new",
+                         placeholder="比如：晨起空腹")
+
+    if st.button("✅ 保存体重记录", type="primary", width="stretch"):
+        if day > db.today():
+            st.error("不能记录未来的日期")
+            return
+        existed = db.get_weight_for_date(uid, day.isoformat())
+        try:
+            db.save_weight(uid, day.isoformat(), weight_kg, note)
+        except Exception as exc:
+            flash(f"保存失败：{exc}", "error")
+            st.rerun()
+        msg = f"已保存体重：{weight_kg:.1f} kg（{day.isoformat()}）。"
+        if existed:
+            msg += "当天原有记录已覆盖。"
+        flash(msg)
+        st.rerun()
+
+
+# ---------- 页面主体 ----------
+
+tab_new, tab_today = st.tabs(["📝 新建记录", "📋 今日记录"])
+
+with tab_new:
+    rec_type = st.segmented_control(
+        "记录类型", db.RECORD_TYPES, default="饮食记录", key="rec_type_new"
+    ) or "饮食记录"
+    if rec_type == "饮食记录":
+        render_meal_form()
+    elif rec_type == "运动记录":
+        render_exercise_form()
+    else:
+        render_weight_form()
 
 with tab_today:
     today = db.today().isoformat()
@@ -172,12 +270,21 @@ with tab_today:
     if total["kcal"] > target:
         st.caption(f"今天超出目标 {total['kcal'] - target:.0f} 千卡，明天稍微收一收就好。")
 
+    ex_total = db.day_exercise_total(uid, today)
+    if ex_total["kcal"] > 0:
+        st.caption(
+            f"今日运动消耗约 {ex_total['kcal']:.0f} 千卡"
+            f"（{ex_total['minutes']:.0f} 分钟）。"
+        )
+
+    st.markdown("**🍚 饮食记录**")
     meals = db.get_meals(uid, today)
     if not meals:
-        st.info("今天还没有打卡记录。")
+        st.caption("今天还没有饮食记录。")
     for meal in meals:
         with st.expander(
-            f"{meal['meal_type']} · {meal['kcal']:.0f} 千卡 · {meal['eaten_at'][11:16]}"
+            f"{meal['meal_type']} · {meal['kcal']:.0f} 千卡 · {meal['eaten_at'][11:16]}",
+            key=f"today_meal_{meal['id']}",
         ):
             img = db.get_image(meal["image_path"])
             if img is not None:
@@ -186,6 +293,55 @@ with tab_today:
                 st.markdown(f"- {i['food_name']} {i['grams']:.0f}g · {i['kcal']:.0f} 千卡")
             if meal["note"]:
                 st.caption(f"备注：{meal['note']}")
-            if st.button("删除这条", key=f"del_{meal['id']}", width="stretch"):
-                db.delete_meal(meal["id"], uid)
+            if st.button("删除这条", key=f"del_meal_{meal['id']}", width="stretch"):
+                try:
+                    if not db.delete_meal(meal["id"], uid):
+                        flash("删除失败：记录不存在或无权删除", "error")
+                    else:
+                        flash("已删除这条饮食记录。")
+                except Exception as exc:
+                    flash(f"删除失败：{exc}", "error")
+                st.rerun()
+
+    st.markdown("**🏃 运动记录**")
+    exercises = db.get_exercises(uid, today)
+    if not exercises:
+        st.caption("今天还没有运动记录。")
+    for ex in exercises:
+        with st.expander(
+            f"{ex['exercise_type']} · {ex['duration_min']:.0f} 分钟 · "
+            f"{ex['kcal_burned']:.0f} 千卡 · {ex['recorded_at'][11:16]}",
+            key=f"today_ex_{ex['id']}",
+        ):
+            if ex["note"]:
+                st.caption(f"备注：{ex['note']}")
+            if st.button("删除这条", key=f"del_ex_{ex['id']}", width="stretch"):
+                try:
+                    if not db.delete_exercise(ex["id"], uid):
+                        flash("删除失败：记录不存在或无权删除", "error")
+                    else:
+                        flash("已删除这条运动记录。")
+                except Exception as exc:
+                    flash(f"删除失败：{exc}", "error")
+                st.rerun()
+
+    st.markdown("**⚖️ 体重记录**")
+    w = db.get_weight_for_date(uid, today)
+    if not w:
+        st.caption("今天还没有记录体重。")
+    else:
+        with st.expander(
+            f"{w['weight_kg']:.1f} kg · {w['record_date']}",
+            key=f"today_w_{w['id']}",
+        ):
+            if w["note"]:
+                st.caption(f"备注：{w['note']}")
+            if st.button("删除这条", key=f"del_w_{w['id']}", width="stretch"):
+                try:
+                    if not db.delete_weight(w["id"], uid):
+                        flash("删除失败：记录不存在或无权删除", "error")
+                    else:
+                        flash("已删除这条体重记录。")
+                except Exception as exc:
+                    flash(f"删除失败：{exc}", "error")
                 st.rerun()
