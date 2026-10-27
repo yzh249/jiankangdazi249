@@ -107,9 +107,20 @@ def render_meal_form() -> None:
     b1, b2 = st.columns(2)
     if b1.button("🔍 AI 识别", disabled=pic is None, width="stretch"):
         with st.spinner("正在识别…"):
-            result = ai_client.recognize_food(
-                pic.getvalue(), pic.type or "image/jpeg", hint=note
-            )
+            try:
+                image_bytes = pic.getvalue()
+            except Exception as exc:
+                st.error(f"照片文件读取失败（可能会话过期）：{exc}，请重新上传照片后再识别。")
+                st.session_state.pop(uploader_key, None)
+                st.rerun()
+            try:
+                result = ai_client.recognize_food(
+                    image_bytes, pic.type or "image/jpeg", hint=note
+                )
+            except Exception as exc:
+                st.error(f"识别调用异常：{exc}，可以稍后重试或先手动填写。")
+                set_items([])
+                return
         if result["ok"]:
             set_items([
                 (f["name"], f["grams"], f.get("est")) for f in result["foods"]
