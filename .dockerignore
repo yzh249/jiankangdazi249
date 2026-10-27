@@ -1,0 +1,21 @@
+# 临时文件
+*.pyc
+__pycache__/
+*.log
+*.tmp
+*.bak
+
+# 本地脚本
+_gen_pwa.py
+_gen_sw.py
+_push.py
+_check.py
+start.sh
+_*.py
+
+# 数据库（运行时用 Postgres）
+*.db
+
+# Git
+.git/
+.gitignore
