@@ -3,7 +3,8 @@ uvicorn==0.54.0
 starlette==1.10.0
 h11==0.16.0
 websockets==17.3
-pandas>=2.0
+pandas>=2.2
+numpy>=2.0,<3
 altair>=5.0
 requests>=2.31
 psycopg2-binary>=2.9
